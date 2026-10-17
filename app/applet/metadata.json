@@ -1,0 +1,8 @@
+{
+  "name": "1DM Video Hunter",
+  "description": "Navegador web e gerenciador de downloads robusto com sniffer inteligente de vídeos completos (MP4/WebM/MKV), downloads em lote, biblioteca com busca e player integrado.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

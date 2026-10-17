@@ -1,0 +1,19 @@
+<resources>
+    <string name="app_name">1DM Video Hunter</string>
+    <string name="nav_browser">Navegador</string>
+    <string name="nav_downloads">Baixados</string>
+    <string name="search_hint">Buscar nos baixados...</string>
+    <string name="browser_search_hint">Digite uma URL ou termo de pesquisa...</string>
+    <string name="detected_videos">Vídeos Detectados</string>
+    <string name="download_all">Baixar Selecionados</string>
+    <string name="select_all">Selecionar Todos</string>
+    <string name="watch_video">Assistir</string>
+    <string name="rename">Renomear</string>
+    <string name="delete">Excluir</string>
+    <string name="confirm">Confirmar</string>
+    <string name="cancel">Cancelar</string>
+    <string name="empty_downloads_title">Nenhum vídeo baixado ainda</string>
+    <string name="empty_downloads_desc">Navegue na web para detectar e baixar arquivos MP4, WebM ou MKV.</string>
+    <string name="empty_detected_title">Nenhum vídeo detectado nesta página</string>
+    <string name="empty_detected_desc">Reproduza um vídeo ou acesse uma página com mídias completas.</string>
+</resources>

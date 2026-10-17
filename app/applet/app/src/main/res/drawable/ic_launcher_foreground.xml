@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    
+    <!-- Outer Tech Glow Ring -->
+    <path
+        android:strokeColor="#9D4EDD"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M 32,54 A 26,26 0 1,1 76,54" />
+        
+    <path
+        android:strokeColor="#00E5FF"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M 76,54 A 26,26 0 0,1 32,54" />
+
+    <!-- Center Download Arrow & Video Badge -->
+    <!-- Downward Arrow Body -->
+    <path
+        android:fillColor="#00E5FF"
+        android:pathData="M 51,33 H 57 V 53 H 66 L 54,66 L 42,53 H 51 Z" />
+
+    <!-- Download Base Tray -->
+    <path
+        android:fillColor="#9D4EDD"
+        android:pathData="M 37,70 H 71 C 72.1,70 73,70.9 73,72 C 73,73.1 72.1,74 71,74 H 37 C 35.9,74 35,73.1 35,72 C 35,70.9 35.9,70 37,70 Z" />
+
+    <!-- Play Triangle Accent -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 52,43 L 58,47 L 52,51 Z" />
+</vector>
