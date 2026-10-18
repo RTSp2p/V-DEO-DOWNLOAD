@@ -1,8 +1,9 @@
 package com.example.ui.browser
 
 import android.annotation.SuppressLint
-import android.graphics.Bitmap
+import android.os.Bundle
 import android.view.ViewGroup
+import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -14,17 +15,11 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -46,8 +41,10 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -55,12 +52,15 @@ import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
@@ -68,13 +68,13 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import com.example.browser.VideoSnifferWebViewClient
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -95,6 +95,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
+import com.example.browser.VideoSnifferJsBridge
+import com.example.browser.VideoSnifferWebViewClient
 import com.example.ui.theme.AmoledBlack
 import com.example.ui.theme.AmoledOutline
 import com.example.ui.theme.AmoledSurface
@@ -104,7 +106,6 @@ import com.example.ui.theme.NeonPurple
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.launch
 
 private data class QuickBookmark(
     val title: String,
@@ -117,6 +118,7 @@ private data class QuickBookmark(
 @Composable
 fun BrowserScreen(
     viewModel: BrowserViewModel,
+    onNavigateToHome: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val detectedVideos by viewModel.detectedVideos.collectAsStateWithLifecycle()
@@ -125,14 +127,20 @@ fun BrowserScreen(
     val progress by viewModel.progress.collectAsStateWithLifecycle()
     val selectedIds by viewModel.selectedIds.collectAsStateWithLifecycle()
     val isBatchSheetVisible by viewModel.isBatchSheetVisible.collectAsStateWithLifecycle()
+    val isSnifferEnabled by viewModel.isSnifferEnabled.collectAsStateWithLifecycle()
+    val browsingHistory by viewModel.browsingHistory.collectAsStateWithLifecycle()
+    val isHistoryDialogVisible by viewModel.isHistoryDialogVisible.collectAsStateWithLifecycle()
 
     var webViewInstance by remember { mutableStateOf<WebView?>(null) }
     var urlInputText by remember { mutableStateOf(currentUrl) }
     var isShowingStartPage by remember { mutableStateOf(false) }
+    var showOptionsMenu by remember { mutableStateOf(false) }
+
+    // Bundle para salvar e restaurar o estado da WebView
+    val webViewStateBundle = rememberSaveable { Bundle() }
 
     val focusManager = LocalFocusManager.current
     val snackbarHostState = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
 
     // Listen to messages
     LaunchedEffect(Unit) {
@@ -141,9 +149,22 @@ fun BrowserScreen(
         }
     }
 
+    LaunchedEffect(currentUrl) {
+        if (!isShowingStartPage) {
+            urlInputText = currentUrl
+        }
+    }
+
     // Handle Hardware / Gesture Back for WebView
     BackHandler(enabled = webViewInstance?.canGoBack() == true) {
         webViewInstance?.goBack()
+    }
+
+    // Salvar estado ao sair
+    DisposableEffect(Unit) {
+        onDispose {
+            webViewInstance?.saveState(webViewStateBundle)
+        }
     }
 
     val quickBookmarks = remember {
@@ -179,35 +200,76 @@ fun BrowserScreen(
                     .background(AmoledSurface)
                     .statusBarsPadding()
             ) {
-                // Navigation Bar & Omnibox
+                // Barra de Navegação Superior Integrada em Linha única:
+                // [ < ] [ > ] [ ⟳ ] [ Omnibox URL / Busca ] [ ⋮ ]
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                        .padding(horizontal = 6.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // Botão Voltar (canGoBack)
                     IconButton(
-                        onClick = {
-                            isShowingStartPage = true
-                            urlInputText = ""
-                        },
-                        modifier = Modifier.size(38.dp)
+                        onClick = { webViewInstance?.goBack() },
+                        enabled = webViewInstance?.canGoBack() == true,
+                        modifier = Modifier
+                            .size(36.dp)
+                            .testTag("browser_back_btn")
                     ) {
                         Icon(
-                            imageVector = Icons.Default.Home,
-                            contentDescription = "Página Inicial",
-                            tint = if (isShowingStartPage) NeonCyan else TextSecondary,
-                            modifier = Modifier.size(22.dp)
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Voltar",
+                            tint = if (webViewInstance?.canGoBack() == true) NeonCyan else TextSecondary.copy(alpha = 0.35f),
+                            modifier = Modifier.size(20.dp)
                         )
                     }
 
-                    // Omnibox URL TextField
+                    // Botão Avançar (canGoForward)
+                    IconButton(
+                        onClick = { webViewInstance?.goForward() },
+                        enabled = webViewInstance?.canGoForward() == true,
+                        modifier = Modifier
+                            .size(36.dp)
+                            .testTag("browser_forward_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                            contentDescription = "Avançar",
+                            tint = if (webViewInstance?.canGoForward() == true) NeonCyan else TextSecondary.copy(alpha = 0.35f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
+                    // Botão Recarregar (reload)
+                    IconButton(
+                        onClick = {
+                            if (isShowingStartPage) {
+                                navigateTo(urlInputText.ifBlank { "https://html5test.com" })
+                            } else {
+                                webViewInstance?.reload()
+                            }
+                        },
+                        modifier = Modifier
+                            .size(36.dp)
+                            .testTag("browser_reload_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Recarregar",
+                            tint = NeonCyan,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(4.dp))
+
+                    // Omnibox URL / Campo de Pesquisa
                     OutlinedTextField(
                         value = urlInputText,
                         onValueChange = { urlInputText = it },
                         modifier = Modifier
                             .weight(1f)
-                            .height(50.dp)
+                            .height(48.dp)
                             .testTag("browser_url_input"),
                         placeholder = {
                             Text(
@@ -251,22 +313,100 @@ fun BrowserScreen(
 
                     Spacer(modifier = Modifier.width(4.dp))
 
-                    IconButton(
-                        onClick = {
-                            if (isShowingStartPage) {
-                                navigateTo(urlInputText.ifBlank { "https://html5test.com" })
-                            } else {
-                                webViewInstance?.reload()
-                            }
-                        },
-                        modifier = Modifier.size(38.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Refresh,
-                            contentDescription = "Recarregar",
-                            tint = NeonCyan,
-                            modifier = Modifier.size(20.dp)
-                        )
+                    // Menu de Opções (Três Pontos no Canto Superior Direito)
+                    Box {
+                        IconButton(
+                            onClick = { showOptionsMenu = true },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .testTag("browser_options_menu_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.MoreVert,
+                                contentDescription = "Mais opções",
+                                tint = NeonCyan,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+
+                        DropdownMenu(
+                            expanded = showOptionsMenu,
+                            onDismissRequest = { showOptionsMenu = false },
+                            modifier = Modifier.background(AmoledSurfaceVariant)
+                        ) {
+                            // 1. "Começar Captura" (Checkbox toggle)
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Checkbox(
+                                            checked = isSnifferEnabled,
+                                            onCheckedChange = { viewModel.setSnifferEnabled(it) },
+                                            colors = CheckboxDefaults.colors(
+                                                checkedColor = NeonCyan,
+                                                checkmarkColor = Color.Black,
+                                                uncheckedColor = TextSecondary
+                                            )
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "Começar Captura",
+                                            color = TextPrimary,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    viewModel.setSnifferEnabled(!isSnifferEnabled)
+                                },
+                                modifier = Modifier.testTag("toggle_sniffer_menu_item")
+                            )
+
+                            // 2. "Voltar para Home" (sem destruir a WebView)
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = Icons.Default.Home,
+                                            contentDescription = null,
+                                            tint = NeonCyan,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Text("Voltar para Home", color = TextPrimary, fontSize = 14.sp)
+                                    }
+                                },
+                                onClick = {
+                                    showOptionsMenu = false
+                                    onNavigateToHome()
+                                },
+                                modifier = Modifier.testTag("navigate_home_menu_item")
+                            )
+
+                            // 3. "Histórico" (últimos 30 sites visitados)
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = Icons.Default.History,
+                                            contentDescription = null,
+                                            tint = NeonPurple,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Text("Histórico", color = TextPrimary, fontSize = 14.sp)
+                                    }
+                                },
+                                onClick = {
+                                    showOptionsMenu = false
+                                    viewModel.openHistoryDialog()
+                                },
+                                modifier = Modifier.testTag("view_history_menu_item")
+                            )
+                        }
                     }
                 }
 
@@ -341,7 +481,7 @@ fun BrowserScreen(
                 .padding(innerPadding)
                 .background(AmoledBlack)
         ) {
-            // Start Page View
+            // Start Page View (se acionada)
             if (isShowingStartPage) {
                 Column(
                     modifier = Modifier
@@ -349,9 +489,8 @@ fun BrowserScreen(
                         .padding(20.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Spacer(modifier = Modifier.height(24.dp))
-                    
-                    // Logo / Hero Header
+                    Spacer(modifier = Modifier.height(20.dp))
+
                     Box(
                         modifier = Modifier
                             .size(72.dp)
@@ -369,23 +508,23 @@ fun BrowserScreen(
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
 
                     Text(
                         text = "1DM Video Hunter",
                         color = TextPrimary,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 22.sp
+                        fontSize = 20.sp
                     )
                     Text(
                         text = "Navegue e capture vídeos MP4, WebM e MKV instantaneamente",
                         color = TextSecondary,
                         fontSize = 13.sp,
                         textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
                     )
 
-                    Spacer(modifier = Modifier.height(28.dp))
+                    Spacer(modifier = Modifier.height(24.dp))
 
                     Text(
                         text = "Atalhos Rápidos de Teste",
@@ -460,12 +599,33 @@ fun BrowserScreen(
                                 domStorageEnabled = true
                                 databaseEnabled = true
                                 mediaPlaybackRequiresUserGesture = false
+                                userAgentString = VideoSnifferJsBridge.MODERN_MOBILE_USER_AGENT
                                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                                 useWideViewPort = true
                                 loadWithOverviewMode = true
                                 builtInZoomControls = true
                                 displayZoomControls = false
                             }
+
+                            try {
+                                val cookieManager = CookieManager.getInstance()
+                                cookieManager.setAcceptCookie(true)
+                                cookieManager.setAcceptThirdPartyCookies(this, true)
+                            } catch (_: Exception) {
+                            }
+
+                            viewModel.updateWebViewContext(
+                                pageUrl = currentUrl,
+                                userAgent = settings.userAgentString
+                            )
+
+                            val jsBridge = VideoSnifferJsBridge(
+                                onVideoDetected = { url, fileName, ext ->
+                                    viewModel.onVideoSniffed(url, fileName, ext)
+                                }
+                            )
+                            addJavascriptInterface(jsBridge, VideoSnifferJsBridge.INTERFACE_NAME)
+                            addJavascriptInterface(jsBridge, VideoSnifferJsBridge.BRIDGE_ALIAS_NAME)
 
                             webViewClient = VideoSnifferWebViewClient(
                                 onVideoDetected = { url, fileName, ext ->
@@ -475,11 +635,13 @@ fun BrowserScreen(
                                     viewModel.setLoading(true)
                                     urlInputText = url
                                     viewModel.updateUrl(url)
+                                    viewModel.updateWebViewContext(url, settings.userAgentString)
                                 },
                                 onPageFinishedCallback = { url, title ->
                                     viewModel.setLoading(false)
                                     viewModel.setPageTitle(title)
                                     urlInputText = url
+                                    viewModel.updateWebViewContext(url, settings.userAgentString)
                                 }
                             )
 
@@ -493,54 +655,21 @@ fun BrowserScreen(
                                 }
                             }
 
-                            loadUrl(currentUrl)
+                            // Restaura o estado da sessão se disponível, ou carrega a última URL
+                            if (!webViewStateBundle.isEmpty) {
+                                restoreState(webViewStateBundle)
+                            } else {
+                                loadUrl(currentUrl)
+                            }
+
                             webViewInstance = this
                         }
                     },
+                    update = { view ->
+                        webViewInstance = view
+                    },
                     modifier = Modifier.fillMaxSize()
                 )
-            }
-
-            // Bottom Navigation Bar for WebView controls (Back / Forward)
-            if (!isShowingStartPage) {
-                Surface(
-                    color = AmoledSurface.copy(alpha = 0.92f),
-                    shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .padding(start = 16.dp, bottom = 16.dp)
-                        .border(1.dp, AmoledOutline, RoundedCornerShape(16.dp))
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(
-                            onClick = { webViewInstance?.goBack() },
-                            enabled = webViewInstance?.canGoBack() == true,
-                            modifier = Modifier.size(36.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Página anterior",
-                                tint = if (webViewInstance?.canGoBack() == true) NeonCyan else TextSecondary.copy(alpha = 0.4f),
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                        IconButton(
-                            onClick = { webViewInstance?.goForward() },
-                            enabled = webViewInstance?.canGoForward() == true,
-                            modifier = Modifier.size(36.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                                contentDescription = "Próxima página",
-                                tint = if (webViewInstance?.canGoForward() == true) NeonCyan else TextSecondary.copy(alpha = 0.4f),
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    }
-                }
             }
         }
     }
@@ -555,7 +684,25 @@ fun BrowserScreen(
             onDownloadSingle = { video -> viewModel.startSingleDownload(video) },
             onDownloadBatch = { viewModel.startBatchDownload() },
             onClearAll = { viewModel.clearDetected() },
+            onCancelActiveDownloads = { viewModel.cancelActiveDownloads() },
             onDismiss = { viewModel.closeBatchSheet() }
+        )
+    }
+
+    // Diálogo Modal de Histórico de Navegação (últimos 30 sites)
+    if (isHistoryDialogVisible) {
+        BrowsingHistoryDialog(
+            historyList = browsingHistory,
+            onSelectUrl = { selectedUrl ->
+                viewModel.closeHistoryDialog()
+                navigateTo(selectedUrl)
+            },
+            onClearHistory = {
+                viewModel.clearBrowsingHistory()
+            },
+            onDismiss = {
+                viewModel.closeHistoryDialog()
+            }
         )
     }
 }

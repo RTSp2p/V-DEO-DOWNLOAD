@@ -19,29 +19,36 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Movie
-import androidx.compose.material.icons.outlined.Circle
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.data.local.entity.CapturedVideoEntity
+import com.example.ui.theme.AccentRed
 import com.example.ui.theme.AmoledOutline
 import com.example.ui.theme.AmoledSurface
 import com.example.ui.theme.AmoledSurfaceVariant
@@ -72,11 +80,14 @@ fun BatchDownloadSheet(
     onDownloadSingle: (CapturedVideoEntity) -> Unit,
     onDownloadBatch: () -> Unit,
     onClearAll: () -> Unit,
+    onCancelActiveDownloads: () -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val allSelected = detectedVideos.isNotEmpty() && selectedIds.size == detectedVideos.size
+    var showClearConfirmationDialog by remember { mutableStateOf(false) }
+    var showActionsMenu by remember { mutableStateOf(false) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -137,19 +148,16 @@ fun BatchDownloadSheet(
                     }
                 }
 
-                Row {
-                    if (detectedVideos.isNotEmpty()) {
-                        IconButton(
-                            onClick = onClearAll,
-                            modifier = Modifier.testTag("clear_detected_btn")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Limpar lista",
-                                tint = TextSecondary
-                            )
-                        }
-                    }
+                // Botão "X": apenas fecha/minimiza a janela mantendo os itens intactos no banco
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.testTag("close_sheet_btn")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Fechar janela",
+                        tint = TextSecondary
+                    )
                 }
             }
 
@@ -186,7 +194,7 @@ fun BatchDownloadSheet(
                     }
                 }
             } else {
-                // Batch Action Bar
+                // Batch Action Bar (Select All + Selected Count)
                 Surface(
                     color = AmoledSurfaceVariant,
                     shape = RoundedCornerShape(12.dp),
@@ -239,7 +247,7 @@ fun BatchDownloadSheet(
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 380.dp),
+                        .heightIn(max = 340.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(detectedVideos, key = { it.id }) { video ->
@@ -289,7 +297,6 @@ fun BatchDownloadSheet(
                                     )
                                     Spacer(modifier = Modifier.height(4.dp))
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        // Badge format (.mp4, .webm, .mkv)
                                         Box(
                                             modifier = Modifier
                                                 .clip(RoundedCornerShape(4.dp))
@@ -342,35 +349,154 @@ fun BatchDownloadSheet(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Primary Batch Download Button
-                Button(
-                    onClick = onDownloadBatch,
-                    enabled = selectedIds.isNotEmpty(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = NeonCyan,
-                        contentColor = Color.Black,
-                        disabledContainerColor = AmoledOutline,
-                        disabledContentColor = TextSecondary
-                    ),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(50.dp)
-                        .testTag("batch_download_confirm_btn")
+                // Bottom Action Row with Options Menu & Batch Download Button
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Download,
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Baixar Selecionados (${selectedIds.size})",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp
-                    )
+                    // Botão de Ações no Canto Inferior Esquerdo (Limpar Todos / Cancelar Download)
+                    Box {
+                        FilledTonalButton(
+                            onClick = { showActionsMenu = true },
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = AmoledSurfaceVariant,
+                                contentColor = TextPrimary
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .height(50.dp)
+                                .testTag("sheet_actions_menu_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.MoreVert,
+                                contentDescription = "Mais Ações",
+                                tint = NeonCyan,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Ações", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        }
+
+                        DropdownMenu(
+                            expanded = showActionsMenu,
+                            onDismissRequest = { showActionsMenu = false },
+                            modifier = Modifier.background(AmoledSurfaceVariant)
+                        ) {
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = Icons.Default.DeleteSweep,
+                                            contentDescription = null,
+                                            tint = AccentRed,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Limpar Todos", color = AccentRed, fontSize = 14.sp)
+                                    }
+                                },
+                                onClick = {
+                                    showActionsMenu = false
+                                    showClearConfirmationDialog = true
+                                },
+                                modifier = Modifier.testTag("clear_all_detected_menu_item")
+                            )
+
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = Icons.Default.Cancel,
+                                            contentDescription = null,
+                                            tint = NeonPurple,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Cancelar Downloads Ativos", color = TextPrimary, fontSize = 14.sp)
+                                    }
+                                },
+                                onClick = {
+                                    showActionsMenu = false
+                                    onCancelActiveDownloads()
+                                },
+                                modifier = Modifier.testTag("cancel_active_downloads_menu_item")
+                            )
+                        }
+                    }
+
+                    // Botão Principal "Baixar Selecionados"
+                    Button(
+                        onClick = onDownloadBatch,
+                        enabled = selectedIds.isNotEmpty(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = NeonCyan,
+                            contentColor = Color.Black,
+                            disabledContainerColor = AmoledOutline,
+                            disabledContentColor = TextSecondary
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(50.dp)
+                            .testTag("batch_download_confirm_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Download,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Baixar (${selectedIds.size})",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                    }
                 }
             }
         }
+    }
+
+    // Diálogo de Confirmação para "Limpar Todos"
+    if (showClearConfirmationDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearConfirmationDialog = false },
+            containerColor = AmoledSurface,
+            title = {
+                Text(
+                    text = "Limpar Vídeos Detectados?",
+                    color = TextPrimary,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = "Deseja remover todos os vídeos detectados da lista? Os arquivos que já estão em download ou concluídos não serão afetados.",
+                    color = TextSecondary,
+                    fontSize = 14.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showClearConfirmationDialog = false
+                        onClearAll()
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = AccentRed,
+                        contentColor = Color.White
+                    ),
+                    modifier = Modifier.testTag("confirm_clear_all_btn")
+                ) {
+                    Text("Limpar", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearConfirmationDialog = false }) {
+                    Text("Cancelar", color = TextSecondary)
+                }
+            }
+        )
     }
 }

@@ -4,7 +4,6 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
-import androidx.room.Update
 import com.example.data.local.entity.CapturedVideoEntity
 import kotlinx.coroutines.flow.Flow
 
@@ -19,6 +18,24 @@ interface VideoDao {
 
     @Query("SELECT * FROM captured_videos WHERE downloadStatus = 'COMPLETED' ORDER BY capturedAt DESC")
     fun observeCompletedVideos(): Flow<List<CapturedVideoEntity>>
+
+    @Query("SELECT * FROM captured_videos ORDER BY capturedAt DESC")
+    fun observeAllVideos(): Flow<List<CapturedVideoEntity>>
+
+    @Query("SELECT * FROM captured_videos WHERE downloadStatus = 'DOWNLOADING' ORDER BY capturedAt DESC")
+    fun observeDownloadingVideos(): Flow<List<CapturedVideoEntity>>
+
+    @Query("SELECT * FROM captured_videos WHERE downloadStatus = 'FAILED' ORDER BY capturedAt DESC")
+    fun observeFailedVideos(): Flow<List<CapturedVideoEntity>>
+
+    @Query("SELECT * FROM captured_videos WHERE downloadStatus = 'DOWNLOADING'")
+    suspend fun getDownloadingVideos(): List<CapturedVideoEntity>
+
+    @Query("UPDATE captured_videos SET downloadStatus = 'FAILED' WHERE downloadStatus = 'DOWNLOADING'")
+    suspend fun cancelAllDownloading()
+
+    @Query("UPDATE captured_videos SET downloadStatus = :status WHERE id = :id")
+    suspend fun updateStatus(id: Long, status: String)
 
     @Query("UPDATE captured_videos SET fileName = :newName WHERE id = :id")
     suspend fun updateFileName(id: Long, newName: String)

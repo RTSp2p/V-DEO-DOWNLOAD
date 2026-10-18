@@ -22,6 +22,7 @@ class VideoHunterApplication : Application() {
         downloadHelper = DownloadHelper(this)
         repository = VideoRepository(
             videoDao = database.videoDao(),
+            browsingHistoryDao = database.browsingHistoryDao(),
             downloadHelper = downloadHelper,
             context = this
         )

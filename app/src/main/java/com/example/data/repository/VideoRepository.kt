@@ -5,7 +5,9 @@ import android.content.Context
 import android.net.Uri
 import android.os.Environment
 import com.example.data.download.DownloadHelper
+import com.example.data.local.dao.BrowsingHistoryDao
 import com.example.data.local.dao.VideoDao
+import com.example.data.local.entity.BrowsingHistoryEntity
 import com.example.data.local.entity.CapturedVideoEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -14,6 +16,7 @@ import java.io.File
 
 class VideoRepository(
     private val videoDao: VideoDao,
+    private val browsingHistoryDao: BrowsingHistoryDao,
     private val downloadHelper: DownloadHelper,
     private val context: Context
 ) {
@@ -23,6 +26,39 @@ class VideoRepository(
 
     fun observeCompletedVideos(): Flow<List<CapturedVideoEntity>> =
         videoDao.observeCompletedVideos()
+
+    fun observeAllVideos(): Flow<List<CapturedVideoEntity>> =
+        videoDao.observeAllVideos()
+
+    fun observeDownloadingVideos(): Flow<List<CapturedVideoEntity>> =
+        videoDao.observeDownloadingVideos()
+
+    fun observeFailedVideos(): Flow<List<CapturedVideoEntity>> =
+        videoDao.observeFailedVideos()
+
+    fun observeBrowsingHistory(): Flow<List<BrowsingHistoryEntity>> =
+        browsingHistoryDao.observeHistory()
+
+    suspend fun recordBrowsingVisit(url: String, title: String) = withContext(Dispatchers.IO) {
+        if (url.isBlank() || url.startsWith("about:") || url.startsWith("chrome:")) return@withContext
+        val cleanTitle = title.ifBlank { url }
+        browsingHistoryDao.insertHistory(
+            BrowsingHistoryEntity(
+                url = url,
+                title = cleanTitle,
+                visitedAt = System.currentTimeMillis()
+            )
+        )
+        browsingHistoryDao.trimHistory()
+    }
+
+    suspend fun clearBrowsingHistory() = withContext(Dispatchers.IO) {
+        browsingHistoryDao.clearHistory()
+    }
+
+    fun updateWebViewContext(pageUrl: String?, userAgent: String?) {
+        downloadHelper.updateWebViewContext(pageUrl, userAgent)
+    }
 
     /**
      * Inserts a captured video into Room.
@@ -50,6 +86,7 @@ class VideoRepository(
             )
             true
         } else {
+            videoDao.updateStatus(video.id, CapturedVideoEntity.STATUS_FAILED)
             false
         }
     }
@@ -72,9 +109,41 @@ class VideoRepository(
                     downloadId = downloadId
                 )
                 count++
+            } else {
+                videoDao.updateStatus(video.id, CapturedVideoEntity.STATUS_FAILED)
             }
         }
         count
+    }
+
+    /**
+     * Cancela todos os downloads ativos chamando downloadManager.remove(id)
+     * e atualizando o status para FAILED no Room.
+     */
+    suspend fun cancelAllActiveDownloads(): Int = withContext(Dispatchers.IO) {
+        val downloading = videoDao.getDownloadingVideos()
+        val ids = downloading.map { it.downloadId }
+        downloadHelper.cancelDownloads(ids)
+        videoDao.cancelAllDownloading()
+        downloading.size
+    }
+
+    /**
+     * Cancela um download específico ativo.
+     */
+    suspend fun cancelSingleDownload(video: CapturedVideoEntity): Boolean = withContext(Dispatchers.IO) {
+        if (video.downloadId > 0) {
+            downloadHelper.cancelDownload(video.downloadId)
+        }
+        videoDao.updateStatus(video.id, CapturedVideoEntity.STATUS_FAILED)
+        true
+    }
+
+    /**
+     * Tenta novamente iniciar o download de um item que falhou ou foi cancelado.
+     */
+    suspend fun retryDownload(video: CapturedVideoEntity): Boolean = withContext(Dispatchers.IO) {
+        startDownload(video)
     }
 
     /**
@@ -86,14 +155,17 @@ class VideoRepository(
         val video = videoDao.getVideoByDownloadId(downloadId)
 
         if (video != null) {
+            if (downloadInfo?.status == DownloadManager.STATUS_FAILED) {
+                videoDao.updateStatus(video.id, CapturedVideoEntity.STATUS_FAILED)
+                return@withContext
+            }
+
             val localUri = downloadInfo?.localUri ?: run {
-                // Fallback to standard Downloads directory file path
                 val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
                 val targetFile = File(downloadsDir, video.fileName)
                 if (targetFile.exists()) Uri.fromFile(targetFile).toString() else null
             }
-            
-            // Determine real size on disk if available
+
             var fileSize = downloadInfo?.totalBytes ?: 0L
             if (fileSize <= 0L && localUri != null) {
                 try {
@@ -127,7 +199,6 @@ class VideoRepository(
             "$newNameWithoutExt.$ext"
         }
 
-        // Try renaming physical file if localUri is a file:// Uri
         var updatedUri = video.localUri
         if (video.localUri != null) {
             try {
@@ -160,7 +231,6 @@ class VideoRepository(
     suspend fun deleteVideo(id: Long): Boolean = withContext(Dispatchers.IO) {
         val video = videoDao.getVideoById(id)
         if (video != null) {
-            // Remove physical file
             video.localUri?.let { uriStr ->
                 try {
                     val uri = Uri.parse(uriStr)

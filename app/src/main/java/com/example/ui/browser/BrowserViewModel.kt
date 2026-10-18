@@ -3,6 +3,8 @@ package com.example.ui.browser
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.data.SessionManager
+import com.example.data.local.entity.BrowsingHistoryEntity
 import com.example.data.local.entity.CapturedVideoEntity
 import com.example.data.repository.VideoRepository
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -16,7 +18,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 class BrowserViewModel(
-    private val repository: VideoRepository
+    private val repository: VideoRepository,
+    private val sessionManager: SessionManager
 ) : ViewModel() {
 
     // Detected videos from Room
@@ -27,8 +30,10 @@ class BrowserViewModel(
             initialValue = emptyList()
         )
 
-    // Current page URL and state
-    private val _currentUrl = MutableStateFlow("https://html5test.com")
+    // Current page URL with session restoration
+    private val _currentUrl = MutableStateFlow(
+        sessionManager.getLastUrl() ?: "https://html5test.com"
+    )
     val currentUrl: StateFlow<String> = _currentUrl.asStateFlow()
 
     private val _pageTitle = MutableStateFlow("Início")
@@ -40,6 +45,21 @@ class BrowserViewModel(
     private val _progress = MutableStateFlow(0)
     val progress: StateFlow<Int> = _progress.asStateFlow()
 
+    // Chave de controle (toggle booleano) para pausar ou retomar a detecção do video sniffer
+    private val _isSnifferEnabled = MutableStateFlow(true)
+    val isSnifferEnabled: StateFlow<Boolean> = _isSnifferEnabled.asStateFlow()
+
+    // Histórico de navegação
+    val browsingHistory: StateFlow<List<BrowsingHistoryEntity>> = repository.observeBrowsingHistory()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
+    private val _isHistoryDialogVisible = MutableStateFlow(false)
+    val isHistoryDialogVisible: StateFlow<Boolean> = _isHistoryDialogVisible.asStateFlow()
+
     // Batch download selection state
     private val _selectedIds = MutableStateFlow<Set<Long>>(emptySet())
     val selectedIds: StateFlow<Set<Long>> = _selectedIds.asStateFlow()
@@ -48,16 +68,30 @@ class BrowserViewModel(
     private val _isBatchSheetVisible = MutableStateFlow(false)
     val isBatchSheetVisible: StateFlow<Boolean> = _isBatchSheetVisible.asStateFlow()
 
-    // UI events (e.g. download started toast)
+    // UI events (e.g. toast / snackbar)
     private val _userMessage = MutableSharedFlow<String>()
     val userMessage: SharedFlow<String> = _userMessage.asSharedFlow()
 
     fun updateUrl(newUrl: String) {
         _currentUrl.value = newUrl
+        sessionManager.saveLastUrl(newUrl)
+        repository.updateWebViewContext(pageUrl = newUrl, userAgent = null)
+    }
+
+    fun updateWebViewContext(pageUrl: String?, userAgent: String?) {
+        repository.updateWebViewContext(pageUrl = pageUrl, userAgent = userAgent)
     }
 
     fun setPageTitle(title: String?) {
-        _pageTitle.value = title?.takeIf { it.isNotBlank() } ?: "Página Web"
+        val resolved = title?.takeIf { it.isNotBlank() } ?: "Página Web"
+        _pageTitle.value = resolved
+        // Registra visita no histórico
+        val url = _currentUrl.value
+        if (url.isNotBlank() && !url.startsWith("about:") && !url.startsWith("chrome:")) {
+            viewModelScope.launch {
+                repository.recordBrowsingVisit(url, resolved)
+            }
+        }
     }
 
     fun setLoading(loading: Boolean) {
@@ -68,8 +102,33 @@ class BrowserViewModel(
         _progress.value = prog
     }
 
+    fun setSnifferEnabled(enabled: Boolean) {
+        _isSnifferEnabled.value = enabled
+        viewModelScope.launch {
+            if (enabled) {
+                _userMessage.emit("Captura de vídeo ativada")
+            } else {
+                _userMessage.emit("Captura de vídeo pausada")
+            }
+        }
+    }
+
+    fun openHistoryDialog() {
+        _isHistoryDialogVisible.value = true
+    }
+
+    fun closeHistoryDialog() {
+        _isHistoryDialogVisible.value = false
+    }
+
+    fun clearBrowsingHistory() {
+        viewModelScope.launch {
+            repository.clearBrowsingHistory()
+            _userMessage.emit("Histórico de navegação limpo")
+        }
+    }
+
     fun openBatchSheet() {
-        // Pre-select all detected items when opening sheet
         val allIds = detectedVideos.value.map { it.id }.toSet()
         _selectedIds.value = allIds
         _isBatchSheetVisible.value = true
@@ -100,6 +159,9 @@ class BrowserViewModel(
     }
 
     fun onVideoSniffed(url: String, fileName: String, extension: String) {
+        // Se a captura estiver pausada pelo usuário, descarta imediatamente
+        if (!_isSnifferEnabled.value) return
+
         viewModelScope.launch {
             val entity = CapturedVideoEntity(
                 videoUrl = url,
@@ -138,6 +200,17 @@ class BrowserViewModel(
         }
     }
 
+    fun cancelActiveDownloads() {
+        viewModelScope.launch {
+            val count = repository.cancelAllActiveDownloads()
+            if (count > 0) {
+                _userMessage.emit("$count downloads ativos cancelados")
+            } else {
+                _userMessage.emit("Nenhum download ativo para cancelar")
+            }
+        }
+    }
+
     fun clearDetected() {
         viewModelScope.launch {
             repository.clearDetected()
@@ -146,10 +219,13 @@ class BrowserViewModel(
         }
     }
 
-    class Factory(private val repository: VideoRepository) : ViewModelProvider.Factory {
+    class Factory(
+        private val repository: VideoRepository,
+        private val sessionManager: SessionManager
+    ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return BrowserViewModel(repository) as T
+            return BrowserViewModel(repository, sessionManager) as T
         }
     }
 }

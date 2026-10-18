@@ -4,17 +4,23 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import com.example.data.local.dao.BrowsingHistoryDao
 import com.example.data.local.dao.VideoDao
+import com.example.data.local.entity.BrowsingHistoryEntity
 import com.example.data.local.entity.CapturedVideoEntity
 
 @Database(
-    entities = [CapturedVideoEntity::class],
-    version = 1,
+    entities = [
+        CapturedVideoEntity::class,
+        BrowsingHistoryEntity::class
+    ],
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun videoDao(): VideoDao
+    abstract fun browsingHistoryDao(): BrowsingHistoryDao
 
     companion object {
         @Volatile

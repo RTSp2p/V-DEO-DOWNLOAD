@@ -12,14 +12,14 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
@@ -43,7 +43,8 @@ import com.example.ui.browser.BrowserScreen
 import com.example.ui.browser.BrowserViewModel
 import com.example.ui.downloads.DownloadsScreen
 import com.example.ui.downloads.DownloadsViewModel
-import com.example.ui.theme.AmoledOutline
+import com.example.ui.home.HomeScreen
+import com.example.ui.home.HomeViewModel
 import com.example.ui.theme.AmoledSurface
 import com.example.ui.theme.NeonCyan
 import com.example.ui.theme.NeonPurple
@@ -51,17 +52,19 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 
 enum class NavTab {
+    HOME,
     BROWSER,
-    DOWNLOADS
+    LIBRARY
 }
 
 @Composable
 fun MainScreen(
+    homeViewModel: HomeViewModel,
     browserViewModel: BrowserViewModel,
     downloadsViewModel: DownloadsViewModel,
     modifier: Modifier = Modifier
 ) {
-    var currentTab by rememberSaveable { mutableStateOf(NavTab.BROWSER) }
+    var currentTab by rememberSaveable { mutableStateOf(NavTab.HOME) }
 
     // Request POST_NOTIFICATIONS runtime permission on Android 13+
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -75,9 +78,9 @@ fun MainScreen(
         }
     }
 
-    // Custom back handler: If in Downloads, return to Browser
-    BackHandler(enabled = currentTab == NavTab.DOWNLOADS) {
-        currentTab = NavTab.BROWSER
+    // Custom back handler: Se não estiver na Home, volta para a Home
+    BackHandler(enabled = currentTab != NavTab.HOME) {
+        currentTab = NavTab.HOME
     }
 
     Scaffold(
@@ -91,7 +94,38 @@ fun MainScreen(
                     .background(AmoledSurface)
                     .testTag("main_bottom_nav_bar")
             ) {
-                // Tab 1: Browser
+                // Destino 1: Home
+                NavigationBarItem(
+                    selected = currentTab == NavTab.HOME,
+                    onClick = { currentTab = NavTab.HOME },
+                    icon = {
+                        Icon(
+                            imageVector = if (currentTab == NavTab.HOME) {
+                                Icons.Filled.Home
+                            } else {
+                                Icons.Outlined.Home
+                            },
+                            contentDescription = stringResource(R.string.nav_home)
+                        )
+                    },
+                    label = {
+                        Text(
+                            text = stringResource(R.string.nav_home),
+                            fontSize = 11.sp,
+                            fontWeight = if (currentTab == NavTab.HOME) FontWeight.Bold else FontWeight.Normal
+                        )
+                    },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = Color.Black,
+                        selectedTextColor = NeonCyan,
+                        indicatorColor = NeonCyan,
+                        unselectedIconColor = TextSecondary,
+                        unselectedTextColor = TextSecondary
+                    ),
+                    modifier = Modifier.testTag("tab_home")
+                )
+
+                // Destino 2: Navegador
                 NavigationBarItem(
                     selected = currentTab == NavTab.BROWSER,
                     onClick = { currentTab = NavTab.BROWSER },
@@ -108,7 +142,7 @@ fun MainScreen(
                     label = {
                         Text(
                             text = stringResource(R.string.nav_browser),
-                            fontSize = 12.sp,
+                            fontSize = 11.sp,
                             fontWeight = if (currentTab == NavTab.BROWSER) FontWeight.Bold else FontWeight.Normal
                         )
                     },
@@ -122,13 +156,13 @@ fun MainScreen(
                     modifier = Modifier.testTag("tab_browser")
                 )
 
-                // Tab 2: Downloads Library
+                // Destino 3: Biblioteca
                 NavigationBarItem(
-                    selected = currentTab == NavTab.DOWNLOADS,
-                    onClick = { currentTab = NavTab.DOWNLOADS },
+                    selected = currentTab == NavTab.LIBRARY,
+                    onClick = { currentTab = NavTab.LIBRARY },
                     icon = {
                         Icon(
-                            imageVector = if (currentTab == NavTab.DOWNLOADS) {
+                            imageVector = if (currentTab == NavTab.LIBRARY) {
                                 Icons.Filled.VideoLibrary
                             } else {
                                 Icons.Outlined.VideoLibrary
@@ -139,8 +173,8 @@ fun MainScreen(
                     label = {
                         Text(
                             text = stringResource(R.string.nav_downloads),
-                            fontSize = 12.sp,
-                            fontWeight = if (currentTab == NavTab.DOWNLOADS) FontWeight.Bold else FontWeight.Normal
+                            fontSize = 11.sp,
+                            fontWeight = if (currentTab == NavTab.LIBRARY) FontWeight.Bold else FontWeight.Normal
                         )
                     },
                     colors = NavigationBarItemDefaults.colors(
@@ -150,7 +184,7 @@ fun MainScreen(
                         unselectedIconColor = TextSecondary,
                         unselectedTextColor = TextSecondary
                     ),
-                    modifier = Modifier.testTag("tab_downloads")
+                    modifier = Modifier.testTag("tab_library")
                 )
             }
         },
@@ -161,15 +195,22 @@ fun MainScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            Crossfade(targetState = currentTab, label = "tab_crossfade") { tab ->
+            Crossfade(targetState = currentTab, label = "main_tab_crossfade") { tab ->
                 when (tab) {
-                    NavTab.BROWSER -> {
-                        BrowserScreen(
-                            viewModel = browserViewModel,
+                    NavTab.HOME -> {
+                        HomeScreen(
+                            viewModel = homeViewModel,
                             modifier = Modifier.fillMaxSize()
                         )
                     }
-                    NavTab.DOWNLOADS -> {
+                    NavTab.BROWSER -> {
+                        BrowserScreen(
+                            viewModel = browserViewModel,
+                            onNavigateToHome = { currentTab = NavTab.HOME },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                    NavTab.LIBRARY -> {
                         DownloadsScreen(
                             viewModel = downloadsViewModel,
                             modifier = Modifier.fillMaxSize()

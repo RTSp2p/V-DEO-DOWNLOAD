@@ -26,5 +26,6 @@ data class CapturedVideoEntity(
         const val STATUS_DETECTED = "DETECTED"
         const val STATUS_DOWNLOADING = "DOWNLOADING"
         const val STATUS_COMPLETED = "COMPLETED"
+        const val STATUS_FAILED = "FAILED"
     }
 }

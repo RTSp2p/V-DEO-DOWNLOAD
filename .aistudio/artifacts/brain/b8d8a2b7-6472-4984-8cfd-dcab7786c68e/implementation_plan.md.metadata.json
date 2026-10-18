@@ -1,6 +1,6 @@
 {
-  "summary": "Plano de implementação detalhado para o aplicativo de navegação e gerenciador de downloads inspirado no 1DM, incluindo arquitetura MVVM, captura de vídeo no WebView, persistência Room com índice único, downloads em lote com DownloadManager, biblioteca com busca e ordenação, e player Media3 ExoPlayer.",
-  "updatedAt": "2026-10-17T13:19:54.459762738Z",
+  "summary": "Plano de implementação para refatoração da navegação em 3 destinos (Home com abas de status, Navegador com histórico e controle de captura, e Biblioteca), persistência de sessão e histórico no Room, ações no BottomSheet e correção de notificações pontuais.",
+  "updatedAt": "2026-10-17T23:00:52.292690925Z",
   "requestFeedback": true,
   "userFacing": true
 }
