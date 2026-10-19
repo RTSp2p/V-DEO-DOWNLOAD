@@ -13,7 +13,7 @@ interface VideoDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertVideo(video: CapturedVideoEntity): Long
 
-    @Query("SELECT * FROM captured_videos WHERE downloadStatus IN ('DETECTED', 'DOWNLOADING') ORDER BY capturedAt DESC")
+    @Query("SELECT * FROM captured_videos WHERE downloadStatus = 'DETECTED' ORDER BY capturedAt DESC")
     fun observeDetectedVideos(): Flow<List<CapturedVideoEntity>>
 
     @Query("SELECT * FROM captured_videos WHERE downloadStatus = 'COMPLETED' ORDER BY capturedAt DESC")
@@ -46,6 +46,15 @@ interface VideoDao {
     @Query("DELETE FROM captured_videos WHERE id = :id")
     suspend fun deleteVideo(id: Long)
 
+    @Query("DELETE FROM captured_videos WHERE id IN (:ids)")
+    suspend fun deleteVideosByIds(ids: List<Long>): Int
+
+    @Query("DELETE FROM captured_videos WHERE id = :id AND downloadStatus = 'DETECTED'")
+    suspend fun deleteDetectedVideoById(id: Long): Int
+
+    @Query("DELETE FROM captured_videos WHERE id IN (:ids) AND downloadStatus = 'DETECTED'")
+    suspend fun deleteDetectedVideosByIds(ids: List<Long>): Int
+
     @Query("UPDATE captured_videos SET downloadStatus = :status, downloadId = :downloadId WHERE id = :id")
     suspend fun updateStatusAndDownloadId(id: Long, status: String, downloadId: Long)
 
@@ -55,11 +64,17 @@ interface VideoDao {
     @Query("SELECT * FROM captured_videos WHERE id = :id LIMIT 1")
     suspend fun getVideoById(id: Long): CapturedVideoEntity?
 
+    @Query("SELECT * FROM captured_videos WHERE id IN (:ids)")
+    suspend fun getVideosByIds(ids: List<Long>): List<CapturedVideoEntity>
+
     @Query("SELECT * FROM captured_videos WHERE downloadId = :downloadId LIMIT 1")
     suspend fun getVideoByDownloadId(downloadId: Long): CapturedVideoEntity?
 
     @Query("SELECT * FROM captured_videos WHERE videoUrl = :url LIMIT 1")
     suspend fun getVideoByUrl(url: String): CapturedVideoEntity?
+
+    @Query("SELECT * FROM captured_videos WHERE downloadStatus = 'DETECTED'")
+    suspend fun getDetectedVideos(): List<CapturedVideoEntity>
 
     @Query("DELETE FROM captured_videos WHERE downloadStatus = 'DETECTED'")
     suspend fun clearDetectedVideos()

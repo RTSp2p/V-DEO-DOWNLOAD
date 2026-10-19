@@ -1,24 +1,53 @@
 package com.example.data
 
 import android.content.Context
-import android.content.SharedPreferences
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
-class SessionManager(context: Context) {
+private val Context.sessionDataStore: DataStore<Preferences> by preferencesDataStore(
+    name = "browser_session_datastore"
+)
 
-    private val prefs: SharedPreferences =
-        context.getSharedPreferences("browser_session_prefs", Context.MODE_PRIVATE)
+class SessionManager(private val context: Context) {
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    val lastUrlFlow: Flow<String?> = context.sessionDataStore.data.map { prefs ->
+        prefs[KEY_LAST_URL]
+    }
 
     fun saveLastUrl(url: String) {
         if (url.isNotBlank() && !url.startsWith("about:") && !url.startsWith("chrome:")) {
-            prefs.edit().putString(KEY_LAST_URL, url).apply()
+            scope.launch {
+                context.sessionDataStore.edit { prefs ->
+                    prefs[KEY_LAST_URL] = url
+                }
+            }
         }
     }
 
     fun getLastUrl(): String? {
-        return prefs.getString(KEY_LAST_URL, null)
+        return try {
+            runBlocking(Dispatchers.IO) {
+                context.sessionDataStore.data.map { it[KEY_LAST_URL] }.firstOrNull()
+            }
+        } catch (_: Exception) {
+            null
+        }
     }
 
     companion object {
-        private const val KEY_LAST_URL = "last_visited_url"
+        private val KEY_LAST_URL = stringPreferencesKey("last_visited_url")
     }
 }

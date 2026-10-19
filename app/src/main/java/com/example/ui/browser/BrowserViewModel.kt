@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.SessionManager
 import com.example.data.local.entity.BrowsingHistoryEntity
 import com.example.data.local.entity.CapturedVideoEntity
+import com.example.data.repository.SettingsRepository
 import com.example.data.repository.VideoRepository
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,15 +20,24 @@ import kotlinx.coroutines.launch
 
 class BrowserViewModel(
     private val repository: VideoRepository,
-    private val sessionManager: SessionManager
+    private val sessionManager: SessionManager,
+    private val settingsRepository: SettingsRepository? = null
 ) : ViewModel() {
 
-    // Detected videos from Room
+    // Detected videos from Room (status DETECTED)
     val detectedVideos: StateFlow<List<CapturedVideoEntity>> = repository.observeDetectedVideos()
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = emptyList()
+        )
+
+    val downloadFolderUri: StateFlow<String?> = (settingsRepository?.downloadFolderUri
+        ?: MutableStateFlow<String?>(null))
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = null
         )
 
     // Current page URL with session restoration
@@ -180,6 +190,7 @@ class BrowserViewModel(
     fun startSingleDownload(video: CapturedVideoEntity) {
         viewModelScope.launch {
             val success = repository.startDownload(video)
+            _selectedIds.value = _selectedIds.value - video.id
             if (success) {
                 _userMessage.emit("Download iniciado: ${video.fileName}")
             } else {
@@ -194,8 +205,39 @@ class BrowserViewModel(
             val videos = detectedVideos.value.filter { idsToDownload.contains(it.id) }
             if (videos.isNotEmpty()) {
                 val started = repository.startBatchDownload(videos)
+                _selectedIds.value = emptySet()
                 _isBatchSheetVisible.value = false
                 _userMessage.emit("$started downloads em lote iniciados!")
+            }
+        }
+    }
+
+    /**
+     * Remoção individual (por gesto de swipe para a esquerda ou botão) de um vídeo DETECTED:
+     * Executa DELETE FROM captured_videos WHERE id = :id AND downloadStatus = 'DETECTED',
+     * liberando a URL para re-detecção futura e atualizando o contador do FAB.
+     */
+    fun removeDetectedVideo(video: CapturedVideoEntity) {
+        viewModelScope.launch {
+            val removed = repository.deleteDetectedVideo(video.id)
+            _selectedIds.value = _selectedIds.value - video.id
+            if (removed) {
+                _userMessage.emit("Vídeo removido da lista: ${video.fileName}")
+            }
+        }
+    }
+
+    /**
+     * Remoção em lote dos vídeos detectados selecionados.
+     */
+    fun removeSelectedDetectedVideos() {
+        val ids = _selectedIds.value.toList()
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            val removedCount = repository.deleteDetectedVideos(ids)
+            _selectedIds.value = emptySet()
+            if (removedCount > 0) {
+                _userMessage.emit("$removedCount vídeo(s) detectado(s) removido(s)")
             }
         }
     }
@@ -219,13 +261,22 @@ class BrowserViewModel(
         }
     }
 
+    fun setDownloadFolderUri(uriString: String?) {
+        viewModelScope.launch {
+            settingsRepository?.setDownloadFolderUri(uriString)
+            repository.updateDownloadFolderUri(uriString)
+            _userMessage.emit("Pasta de download atualizada!")
+        }
+    }
+
     class Factory(
         private val repository: VideoRepository,
-        private val sessionManager: SessionManager
+        private val sessionManager: SessionManager,
+        private val settingsRepository: SettingsRepository? = null
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return BrowserViewModel(repository, sessionManager) as T
+            return BrowserViewModel(repository, sessionManager, settingsRepository) as T
         }
     }
 }

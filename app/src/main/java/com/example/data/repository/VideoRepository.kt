@@ -4,6 +4,7 @@ import android.app.DownloadManager
 import android.content.Context
 import android.net.Uri
 import android.os.Environment
+import android.provider.DocumentsContract
 import com.example.data.download.DownloadHelper
 import com.example.data.local.dao.BrowsingHistoryDao
 import com.example.data.local.dao.VideoDao
@@ -18,7 +19,8 @@ class VideoRepository(
     private val videoDao: VideoDao,
     private val browsingHistoryDao: BrowsingHistoryDao,
     private val downloadHelper: DownloadHelper,
-    private val context: Context
+    private val context: Context,
+    private val settingsRepository: SettingsRepository? = null
 ) {
 
     fun observeDetectedVideos(): Flow<List<CapturedVideoEntity>> =
@@ -60,6 +62,10 @@ class VideoRepository(
         downloadHelper.updateWebViewContext(pageUrl, userAgent)
     }
 
+    fun updateDownloadFolderUri(folderUri: String?) {
+        downloadHelper.updateDownloadFolderUri(folderUri)
+    }
+
     /**
      * Inserts a captured video into Room.
      * Uses OnConflictStrategy.IGNORE. Returns true if saved, false if duplicate (-1L).
@@ -70,13 +76,18 @@ class VideoRepository(
     }
 
     /**
-     * Enqueues download for a single video.
+     * Enqueues download for a single video using the configured SAF download folder if present.
      */
     suspend fun startDownload(video: CapturedVideoEntity): Boolean = withContext(Dispatchers.IO) {
+        val targetFolderUri = settingsRepository?.getDownloadFolderUriSnapshot()
+            ?: downloadHelper.customDownloadFolderUri
+        downloadHelper.updateDownloadFolderUri(targetFolderUri)
+
         val downloadId = downloadHelper.enqueueDownload(
             videoUrl = video.videoUrl,
             fileName = video.fileName,
-            fileType = video.fileType
+            fileType = video.fileType,
+            targetFolderUri = targetFolderUri
         )
         if (downloadId != -1L) {
             videoDao.updateStatusAndDownloadId(
@@ -95,12 +106,17 @@ class VideoRepository(
      * Starts batch download for multiple captured videos.
      */
     suspend fun startBatchDownload(videos: List<CapturedVideoEntity>): Int = withContext(Dispatchers.IO) {
+        val targetFolderUri = settingsRepository?.getDownloadFolderUriSnapshot()
+            ?: downloadHelper.customDownloadFolderUri
+        downloadHelper.updateDownloadFolderUri(targetFolderUri)
+
         var count = 0
         for (video in videos) {
             val downloadId = downloadHelper.enqueueDownload(
                 videoUrl = video.videoUrl,
                 fileName = video.fileName,
-                fileType = video.fileType
+                fileType = video.fileType,
+                targetFolderUri = targetFolderUri
             )
             if (downloadId != -1L) {
                 videoDao.updateStatusAndDownloadId(
@@ -148,7 +164,7 @@ class VideoRepository(
 
     /**
      * Called when DownloadManager completes a download.
-     * Fetches file details and updates Room.
+     * Fetches file details, transfers to SAF directory if needed, and updates Room.
      */
     suspend fun handleDownloadComplete(downloadId: Long) = withContext(Dispatchers.IO) {
         val downloadInfo = downloadHelper.queryDownloadInfo(downloadId)
@@ -160,16 +176,30 @@ class VideoRepository(
                 return@withContext
             }
 
-            val localUri = downloadInfo?.localUri ?: run {
+            val rawLocalUri = downloadInfo?.localUri ?: run {
                 val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
                 val targetFile = File(downloadsDir, video.fileName)
                 if (targetFile.exists()) Uri.fromFile(targetFile).toString() else null
             }
 
+            val customFolderUri = settingsRepository?.getDownloadFolderUriSnapshot()
+                ?: downloadHelper.customDownloadFolderUri
+
+            val finalLocalUri = if (!customFolderUri.isNullOrBlank()) {
+                downloadHelper.transferToSafFolderIfNeeded(
+                    downloadedLocalUri = rawLocalUri,
+                    fileName = video.fileName,
+                    fileType = video.fileType,
+                    safTreeUriString = customFolderUri
+                )
+            } else {
+                rawLocalUri
+            }
+
             var fileSize = downloadInfo?.totalBytes ?: 0L
-            if (fileSize <= 0L && localUri != null) {
+            if (fileSize <= 0L && finalLocalUri != null) {
                 try {
-                    val uri = Uri.parse(localUri)
+                    val uri = Uri.parse(finalLocalUri)
                     if (uri.scheme == "file") {
                         val file = File(uri.path ?: "")
                         if (file.exists()) fileSize = file.length()
@@ -181,14 +211,14 @@ class VideoRepository(
 
             videoDao.updateDownloadCompleted(
                 downloadId = downloadId,
-                localUri = localUri ?: "",
+                localUri = finalLocalUri ?: "",
                 fileSizeBytes = fileSize
             )
         }
     }
 
     /**
-     * Renames a video file on disk and in Room.
+     * Renames a video file on disk (File or SAF Document) and in Room.
      */
     suspend fun renameVideo(id: Long, newNameWithoutExt: String): Boolean = withContext(Dispatchers.IO) {
         val video = videoDao.getVideoById(id) ?: return@withContext false
@@ -211,6 +241,15 @@ class VideoRepository(
                             updatedUri = Uri.fromFile(newFile).toString()
                         }
                     }
+                } else if (uri.scheme == "content") {
+                    val renamedUri = DocumentsContract.renameDocument(
+                        context.contentResolver,
+                        uri,
+                        finalNewName
+                    )
+                    if (renamedUri != null) {
+                        updatedUri = renamedUri.toString()
+                    }
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -226,7 +265,7 @@ class VideoRepository(
     }
 
     /**
-     * Deletes the video record from Room and removes the physical file from disk.
+     * Deletes the video record from Room and removes the physical file from disk (usado na Biblioteca).
      */
     suspend fun deleteVideo(id: Long): Boolean = withContext(Dispatchers.IO) {
         val video = videoDao.getVideoById(id)
@@ -253,7 +292,53 @@ class VideoRepository(
         }
     }
 
+    /**
+     * Exclusão física real de um item DETECTED do banco Room:
+     * DELETE FROM captured_videos WHERE id = :id AND downloadStatus = 'DETECTED'
+     * Libera a restrição @Index(unique = true) na coluna videoUrl para re-detecção futura.
+     */
+    suspend fun deleteDetectedVideo(id: Long): Boolean = withContext(Dispatchers.IO) {
+        videoDao.deleteDetectedVideoById(id) > 0
+    }
+
+    /**
+     * Exclusão física em lote de itens DETECTED do banco Room, liberando suas URLs para re-detecção.
+     */
+    suspend fun deleteDetectedVideos(ids: List<Long>): Int = withContext(Dispatchers.IO) {
+        var deletedCount = 0
+        for (id in ids) {
+            if (videoDao.deleteDetectedVideoById(id) > 0) {
+                deletedCount++
+            }
+        }
+        deletedCount
+    }
+
+    /**
+     * Limpa todos os itens com status DETECTED executando exclusão física no Room.
+     */
     suspend fun clearDetected() = withContext(Dispatchers.IO) {
+        val detected = videoDao.getDetectedVideos()
+        for (item in detected) {
+            videoDao.deleteDetectedVideoById(item.id)
+        }
         videoDao.clearDetectedVideos()
+    }
+
+    /**
+     * Limpa registros selecionados do histórico nas abas da tela Home ("TODOS", "BAIXANDO", "COMPLETOS", "ERROS").
+     * Para itens finalizados (COMPLETED), NÃO apaga o arquivo físico baixado no armazenamento,
+     * mas remove o registro da tabela captured_videos para liberar o @Index(unique = true) de videoUrl
+     * e permitir novas detecções da mesma URL no futuro.
+     */
+    suspend fun removeVideosFromHistory(ids: List<Long>): Int = withContext(Dispatchers.IO) {
+        if (ids.isEmpty()) return@withContext 0
+        val videos = videoDao.getVideosByIds(ids)
+        for (video in videos) {
+            if (video.downloadStatus == CapturedVideoEntity.STATUS_DOWNLOADING && video.downloadId > 0) {
+                downloadHelper.cancelDownload(video.downloadId)
+            }
+        }
+        videoDao.deleteVideosByIds(ids)
     }
 }

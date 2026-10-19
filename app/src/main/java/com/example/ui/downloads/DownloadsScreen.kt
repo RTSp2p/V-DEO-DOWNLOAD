@@ -1,10 +1,6 @@
 package com.example.ui.downloads
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,7 +28,6 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -43,7 +38,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
@@ -76,14 +71,6 @@ import com.example.R
 import com.example.data.local.entity.CapturedVideoEntity
 import com.example.ui.player.InternalVideoPlayer
 import com.example.ui.theme.AccentRed
-import com.example.ui.theme.AmoledBlack
-import com.example.ui.theme.AmoledOutline
-import com.example.ui.theme.AmoledSurface
-import com.example.ui.theme.AmoledSurfaceVariant
-import com.example.ui.theme.NeonCyan
-import com.example.ui.theme.NeonPurple
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
 import kotlinx.coroutines.flow.collectLatest
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -125,7 +112,7 @@ fun DownloadsScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(AmoledSurface)
+                    .background(MaterialTheme.colorScheme.surface)
                     .statusBarsPadding()
                     .padding(horizontal = 16.dp, vertical = 10.dp)
             ) {
@@ -138,13 +125,13 @@ fun DownloadsScreen(
                     Column {
                         Text(
                             text = "Biblioteca de Baixados",
-                            color = TextPrimary,
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontWeight = FontWeight.Bold,
                             fontSize = 20.sp
                         )
                         Text(
                             text = "${videos.size} vídeos concluídos",
-                            color = TextSecondary,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 12.sp
                         )
                     }
@@ -155,20 +142,20 @@ fun DownloadsScreen(
                             onClick = { isSortMenuExpanded = true },
                             modifier = Modifier
                                 .clip(CircleShape)
-                                .background(AmoledSurfaceVariant)
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
                                 .testTag("sort_menu_button")
                         ) {
                             Icon(
                                 imageVector = Icons.Default.FilterList,
                                 contentDescription = "Ordenar",
-                                tint = NeonCyan
+                                tint = MaterialTheme.colorScheme.primary
                             )
                         }
 
                         DropdownMenu(
                             expanded = isSortMenuExpanded,
                             onDismissRequest = { isSortMenuExpanded = false },
-                            modifier = Modifier.background(AmoledSurfaceVariant)
+                            modifier = Modifier.background(MaterialTheme.colorScheme.surfaceVariant)
                         ) {
                             SortOption.entries.forEach { option ->
                                 DropdownMenuItem(
@@ -178,14 +165,18 @@ fun DownloadsScreen(
                                                 selected = currentSort == option,
                                                 onClick = null,
                                                 colors = RadioButtonDefaults.colors(
-                                                    selectedColor = NeonCyan,
-                                                    unselectedColor = TextSecondary
+                                                    selectedColor = MaterialTheme.colorScheme.primary,
+                                                    unselectedColor = MaterialTheme.colorScheme.onSurfaceVariant
                                                 )
                                             )
                                             Spacer(modifier = Modifier.width(8.dp))
                                             Text(
                                                 text = option.label,
-                                                color = if (currentSort == option) NeonCyan else TextPrimary,
+                                                color = if (currentSort == option) {
+                                                    MaterialTheme.colorScheme.primary
+                                                } else {
+                                                    MaterialTheme.colorScheme.onSurface
+                                                },
                                                 fontSize = 14.sp,
                                                 fontWeight = if (currentSort == option) FontWeight.Bold else FontWeight.Normal
                                             )
@@ -215,7 +206,7 @@ fun DownloadsScreen(
                     placeholder = {
                         Text(
                             text = stringResource(R.string.search_hint),
-                            color = TextSecondary,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 13.sp
                         )
                     },
@@ -223,7 +214,7 @@ fun DownloadsScreen(
                         Icon(
                             imageVector = Icons.Default.Search,
                             contentDescription = null,
-                            tint = NeonCyan,
+                            tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(20.dp)
                         )
                     },
@@ -233,7 +224,7 @@ fun DownloadsScreen(
                                 Icon(
                                     imageVector = Icons.Default.Clear,
                                     contentDescription = "Limpar busca",
-                                    tint = TextSecondary,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(16.dp)
                                 )
                             }
@@ -243,12 +234,12 @@ fun DownloadsScreen(
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = AmoledSurfaceVariant,
-                        unfocusedContainerColor = AmoledSurfaceVariant.copy(alpha = 0.6f),
-                        focusedBorderColor = NeonCyan,
-                        unfocusedBorderColor = AmoledOutline,
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary
+                        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                        focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                        unfocusedTextColor = MaterialTheme.colorScheme.onSurface
                     ),
                     shape = RoundedCornerShape(14.dp)
                 )
@@ -260,7 +251,7 @@ fun DownloadsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .background(AmoledBlack)
+                .background(MaterialTheme.colorScheme.background)
         ) {
             if (videos.isEmpty()) {
                 // Empty Library State
@@ -275,27 +266,27 @@ fun DownloadsScreen(
                             modifier = Modifier
                                 .size(80.dp)
                                 .clip(CircleShape)
-                                .background(NeonPurple.copy(alpha = 0.15f)),
+                                .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f)),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Movie,
                                 contentDescription = null,
-                                tint = NeonPurple,
+                                tint = MaterialTheme.colorScheme.secondary,
                                 modifier = Modifier.size(42.dp)
                             )
                         }
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
                             text = stringResource(R.string.empty_downloads_title),
-                            color = TextPrimary,
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontWeight = FontWeight.Bold,
                             fontSize = 17.sp
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
                             text = stringResource(R.string.empty_downloads_desc),
-                            color = TextSecondary,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 13.sp,
                             modifier = Modifier.padding(horizontal = 24.dp),
                             lineHeight = 18.sp
@@ -336,11 +327,11 @@ fun DownloadsScreen(
     videoToRename?.let { video ->
         AlertDialog(
             onDismissRequest = { viewModel.dismissRename() },
-            containerColor = AmoledSurface,
+            containerColor = MaterialTheme.colorScheme.surface,
             title = {
                 Text(
                     text = "Renomear Vídeo",
-                    color = TextPrimary,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.Bold
                 )
             },
@@ -348,7 +339,7 @@ fun DownloadsScreen(
                 Column {
                     Text(
                         text = "Novo nome do arquivo:",
-                        color = TextSecondary,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 13.sp
                     )
                     Spacer(modifier = Modifier.height(8.dp))
@@ -357,10 +348,10 @@ fun DownloadsScreen(
                         onValueChange = { renameInputText = it },
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary,
-                            focusedBorderColor = NeonCyan,
-                            unfocusedBorderColor = AmoledOutline
+                            focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                            unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
                         ),
                         modifier = Modifier
                             .fillMaxWidth()
@@ -369,7 +360,7 @@ fun DownloadsScreen(
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = "Extensão .${video.fileType} será preservada.",
-                        color = TextSecondary,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 11.sp
                     )
                 }
@@ -382,8 +373,8 @@ fun DownloadsScreen(
                         }
                     },
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = NeonCyan,
-                        contentColor = Color.Black
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
                     ),
                     modifier = Modifier.testTag("confirm_rename_btn")
                 ) {
@@ -392,7 +383,7 @@ fun DownloadsScreen(
             },
             dismissButton = {
                 TextButton(onClick = { viewModel.dismissRename() }) {
-                    Text("Cancelar", color = TextSecondary)
+                    Text("Cancelar", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         )
@@ -402,18 +393,18 @@ fun DownloadsScreen(
     videoToDelete?.let { video ->
         AlertDialog(
             onDismissRequest = { viewModel.dismissDelete() },
-            containerColor = AmoledSurface,
+            containerColor = MaterialTheme.colorScheme.surface,
             title = {
                 Text(
                     text = "Excluir Vídeo?",
-                    color = TextPrimary,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.Bold
                 )
             },
             text = {
                 Text(
                     text = "O arquivo '${video.fileName}' será apagado permanentemente do armazenamento do dispositivo para liberar espaço.",
-                    color = TextSecondary,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 14.sp
                 )
             },
@@ -431,7 +422,7 @@ fun DownloadsScreen(
             },
             dismissButton = {
                 TextButton(onClick = { viewModel.dismissDelete() }) {
-                    Text("Cancelar", color = TextSecondary)
+                    Text("Cancelar", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         )
@@ -449,7 +440,7 @@ private fun DownloadedVideoCard(
     var isMenuExpanded by remember { mutableStateOf(false) }
 
     Card(
-        colors = CardDefaults.cardColors(containerColor = AmoledSurfaceVariant),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
         shape = RoundedCornerShape(14.dp),
         modifier = modifier
             .fillMaxWidth()
@@ -466,13 +457,13 @@ private fun DownloadedVideoCard(
                 modifier = Modifier
                     .size(48.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .background(NeonCyan.copy(alpha = 0.15f)),
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = Icons.Default.Movie,
                     contentDescription = null,
-                    tint = NeonCyan,
+                    tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(26.dp)
                 )
             }
@@ -483,7 +474,7 @@ private fun DownloadedVideoCard(
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = video.fileName,
-                    color = TextPrimary,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 14.sp,
                     maxLines = 1,
@@ -495,12 +486,12 @@ private fun DownloadedVideoCard(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(4.dp))
-                            .background(NeonPurple.copy(alpha = 0.25f))
+                            .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f))
                             .padding(horizontal = 6.dp, vertical = 2.dp)
                     ) {
                         Text(
                             text = video.fileType.uppercase(),
-                            color = NeonPurple,
+                            color = MaterialTheme.colorScheme.secondary,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold
                         )
@@ -510,7 +501,7 @@ private fun DownloadedVideoCard(
 
                     Text(
                         text = formatFileSize(video.fileSizeBytes),
-                        color = TextSecondary,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium
                     )
@@ -519,7 +510,7 @@ private fun DownloadedVideoCard(
 
                     Text(
                         text = formatTimestamp(video.capturedAt),
-                        color = TextSecondary.copy(alpha = 0.7f),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                         fontSize = 11.sp
                     )
                 }
@@ -533,13 +524,13 @@ private fun DownloadedVideoCard(
                 modifier = Modifier
                     .size(42.dp)
                     .clip(CircleShape)
-                    .background(NeonCyan)
+                    .background(MaterialTheme.colorScheme.primary)
                     .testTag("watch_video_btn_${video.id}")
             ) {
                 Icon(
                     imageVector = Icons.Default.PlayArrow,
                     contentDescription = "Assistir",
-                    tint = Color.Black,
+                    tint = MaterialTheme.colorScheme.onPrimary,
                     modifier = Modifier.size(24.dp)
                 )
             }
@@ -553,14 +544,14 @@ private fun DownloadedVideoCard(
                     Icon(
                         imageVector = Icons.Default.MoreVert,
                         contentDescription = "Mais opções",
-                        tint = TextSecondary
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 
                 DropdownMenu(
                     expanded = isMenuExpanded,
                     onDismissRequest = { isMenuExpanded = false },
-                    modifier = Modifier.background(AmoledSurfaceVariant)
+                    modifier = Modifier.background(MaterialTheme.colorScheme.surfaceVariant)
                 ) {
                     DropdownMenuItem(
                         text = {
@@ -568,11 +559,11 @@ private fun DownloadedVideoCard(
                                 Icon(
                                     imageVector = Icons.Default.Edit,
                                     contentDescription = null,
-                                    tint = NeonCyan,
+                                    tint = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Spacer(modifier = Modifier.width(10.dp))
-                                Text("Renomear", color = TextPrimary, fontSize = 14.sp)
+                                Text("Renomear", color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp)
                             }
                         },
                         onClick = {

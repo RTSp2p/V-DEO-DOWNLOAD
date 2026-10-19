@@ -6,6 +6,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import com.example.data.repository.ThemeMode
 
 private val DarkColorScheme = darkColorScheme(
     primary = NeonCyan,
@@ -27,7 +28,9 @@ private val DarkColorScheme = darkColorScheme(
     outline = AmoledOutline,
     outlineVariant = AmoledOutlineVariant,
     error = AccentRed,
-    onError = Color.White
+    onError = Color.White,
+    errorContainer = Color(0xFF690018),
+    onErrorContainer = Color(0xFFFFD9DE)
 )
 
 private val LightColorScheme = lightColorScheme(
@@ -41,20 +44,28 @@ private val LightColorScheme = lightColorScheme(
     onSecondaryContainer = Color(0xFF2C004E),
     tertiary = Color(0xFF006875),
     onTertiary = Color.White,
-    background = Color(0xFFF8FAFC),
+    background = Color(0xFFF1F5F9),
     onBackground = Color(0xFF0F172A),
     surface = Color.White,
     onSurface = Color(0xFF0F172A),
     surfaceVariant = Color(0xFFE2E8F0),
     onSurfaceVariant = Color(0xFF475569),
     outline = Color(0xFFCBD5E1),
+    outlineVariant = Color(0xFFE2E8F0),
     error = AccentRed,
-    onError = Color.White
+    onError = Color.White,
+    errorContainer = Color(0xFFFFDAD6),
+    onErrorContainer = Color(0xFF410002)
 )
 
 @Composable
 fun MyApplicationTheme(
-    darkTheme: Boolean = true, // Default to AMOLED Dark as requested
+    themeMode: ThemeMode = ThemeMode.DARK,
+    darkTheme: Boolean = when (themeMode) {
+        ThemeMode.LIGHT -> false
+        ThemeMode.DARK -> true
+        ThemeMode.SYSTEM -> isSystemInDarkTheme()
+    },
     content: @Composable () -> Unit
 ) {
     val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme

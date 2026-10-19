@@ -1,6 +1,8 @@
 package com.example.ui.browser
 
 import android.annotation.SuppressLint
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.view.ViewGroup
 import android.webkit.CookieManager
@@ -8,6 +10,8 @@ import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
@@ -61,12 +65,12 @@ import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -82,6 +86,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -97,14 +102,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.browser.VideoSnifferJsBridge
 import com.example.browser.VideoSnifferWebViewClient
-import com.example.ui.theme.AmoledBlack
-import com.example.ui.theme.AmoledOutline
-import com.example.ui.theme.AmoledSurface
-import com.example.ui.theme.AmoledSurfaceVariant
 import com.example.ui.theme.NeonCyan
 import com.example.ui.theme.NeonPurple
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
 import kotlinx.coroutines.flow.collectLatest
 
 private data class QuickBookmark(
@@ -122,6 +121,7 @@ fun BrowserScreen(
     modifier: Modifier = Modifier
 ) {
     val detectedVideos by viewModel.detectedVideos.collectAsStateWithLifecycle()
+    val downloadFolderUri by viewModel.downloadFolderUri.collectAsStateWithLifecycle()
     val currentUrl by viewModel.currentUrl.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val progress by viewModel.progress.collectAsStateWithLifecycle()
@@ -136,11 +136,28 @@ fun BrowserScreen(
     var isShowingStartPage by remember { mutableStateOf(false) }
     var showOptionsMenu by remember { mutableStateOf(false) }
 
+    val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
+    val snackbarHostState = remember { SnackbarHostState() }
+
     // Bundle para salvar e restaurar o estado da WebView
     val webViewStateBundle = rememberSaveable { Bundle() }
 
-    val focusManager = LocalFocusManager.current
-    val snackbarHostState = remember { SnackbarHostState() }
+    // SAF OpenDocumentTree Launcher para seleção de pasta de download a partir do menu da janela de vídeos detectados
+    val openDocumentTreeLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                context.contentResolver.takePersistableUriPermission(uri, takeFlags)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            viewModel.setDownloadFolderUri(uri.toString())
+        }
+    }
 
     // Listen to messages
     LaunchedEffect(Unit) {
@@ -197,7 +214,7 @@ fun BrowserScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(AmoledSurface)
+                    .background(MaterialTheme.colorScheme.surface)
                     .statusBarsPadding()
             ) {
                 // Barra de Navegação Superior Integrada em Linha única:
@@ -219,7 +236,11 @@ fun BrowserScreen(
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Voltar",
-                            tint = if (webViewInstance?.canGoBack() == true) NeonCyan else TextSecondary.copy(alpha = 0.35f),
+                            tint = if (webViewInstance?.canGoBack() == true) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+                            },
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -235,7 +256,11 @@ fun BrowserScreen(
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                             contentDescription = "Avançar",
-                            tint = if (webViewInstance?.canGoForward() == true) NeonCyan else TextSecondary.copy(alpha = 0.35f),
+                            tint = if (webViewInstance?.canGoForward() == true) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+                            },
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -247,6 +272,10 @@ fun BrowserScreen(
                                 navigateTo(urlInputText.ifBlank { "https://html5test.com" })
                             } else {
                                 webViewInstance?.reload()
+                                webViewInstance?.evaluateJavascript(
+                                    "if (window.__1dmScanMedia) window.__1dmScanMedia();",
+                                    null
+                                )
                             }
                         },
                         modifier = Modifier
@@ -256,7 +285,7 @@ fun BrowserScreen(
                         Icon(
                             imageVector = Icons.Default.Refresh,
                             contentDescription = "Recarregar",
-                            tint = NeonCyan,
+                            tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -274,7 +303,7 @@ fun BrowserScreen(
                         placeholder = {
                             Text(
                                 text = stringResource(R.string.browser_search_hint),
-                                color = TextSecondary,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontSize = 12.sp,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
@@ -294,19 +323,19 @@ fun BrowserScreen(
                                     Icon(
                                         imageVector = Icons.Default.Clear,
                                         contentDescription = "Limpar",
-                                        tint = TextSecondary,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.size(16.dp)
                                     )
                                 }
                             }
                         },
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = AmoledSurfaceVariant,
-                            unfocusedContainerColor = AmoledSurfaceVariant.copy(alpha = 0.6f),
-                            focusedBorderColor = NeonCyan,
-                            unfocusedBorderColor = AmoledOutline,
-                            focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                            focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                            unfocusedTextColor = MaterialTheme.colorScheme.onSurface
                         ),
                         shape = RoundedCornerShape(24.dp)
                     )
@@ -324,7 +353,7 @@ fun BrowserScreen(
                             Icon(
                                 imageVector = Icons.Default.MoreVert,
                                 contentDescription = "Mais opções",
-                                tint = NeonCyan,
+                                tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(22.dp)
                             )
                         }
@@ -332,7 +361,7 @@ fun BrowserScreen(
                         DropdownMenu(
                             expanded = showOptionsMenu,
                             onDismissRequest = { showOptionsMenu = false },
-                            modifier = Modifier.background(AmoledSurfaceVariant)
+                            modifier = Modifier.background(MaterialTheme.colorScheme.surfaceVariant)
                         ) {
                             // 1. "Começar Captura" (Checkbox toggle)
                             DropdownMenuItem(
@@ -345,15 +374,15 @@ fun BrowserScreen(
                                             checked = isSnifferEnabled,
                                             onCheckedChange = { viewModel.setSnifferEnabled(it) },
                                             colors = CheckboxDefaults.colors(
-                                                checkedColor = NeonCyan,
-                                                checkmarkColor = Color.Black,
-                                                uncheckedColor = TextSecondary
+                                                checkedColor = MaterialTheme.colorScheme.primary,
+                                                checkmarkColor = MaterialTheme.colorScheme.onPrimary,
+                                                uncheckedColor = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         )
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text(
                                             text = "Começar Captura",
-                                            color = TextPrimary,
+                                            color = MaterialTheme.colorScheme.onSurface,
                                             fontSize = 14.sp,
                                             fontWeight = FontWeight.Medium
                                         )
@@ -372,11 +401,15 @@ fun BrowserScreen(
                                         Icon(
                                             imageVector = Icons.Default.Home,
                                             contentDescription = null,
-                                            tint = NeonCyan,
+                                            tint = MaterialTheme.colorScheme.primary,
                                             modifier = Modifier.size(18.dp)
                                         )
                                         Spacer(modifier = Modifier.width(10.dp))
-                                        Text("Voltar para Home", color = TextPrimary, fontSize = 14.sp)
+                                        Text(
+                                            text = "Voltar para Home",
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            fontSize = 14.sp
+                                        )
                                     }
                                 },
                                 onClick = {
@@ -393,11 +426,15 @@ fun BrowserScreen(
                                         Icon(
                                             imageVector = Icons.Default.History,
                                             contentDescription = null,
-                                            tint = NeonPurple,
+                                            tint = MaterialTheme.colorScheme.secondary,
                                             modifier = Modifier.size(18.dp)
                                         )
                                         Spacer(modifier = Modifier.width(10.dp))
-                                        Text("Histórico", color = TextPrimary, fontSize = 14.sp)
+                                        Text(
+                                            text = "Histórico",
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            fontSize = 14.sp
+                                        )
                                     }
                                 },
                                 onClick = {
@@ -414,8 +451,8 @@ fun BrowserScreen(
                 AnimatedVisibility(visible = isLoading) {
                     LinearProgressIndicator(
                         progress = { progress / 100f },
-                        color = NeonCyan,
-                        trackColor = AmoledOutline,
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.outline,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(2.5.dp)
@@ -440,7 +477,7 @@ fun BrowserScreen(
                 badge = {
                     if (detectedVideos.isNotEmpty()) {
                         Badge(
-                            containerColor = NeonPurple,
+                            containerColor = MaterialTheme.colorScheme.secondary,
                             contentColor = Color.White,
                             modifier = Modifier
                                 .padding(end = 4.dp, top = 4.dp)
@@ -457,8 +494,16 @@ fun BrowserScreen(
             ) {
                 FloatingActionButton(
                     onClick = { viewModel.openBatchSheet() },
-                    containerColor = if (detectedVideos.isNotEmpty()) NeonCyan else AmoledSurfaceVariant,
-                    contentColor = if (detectedVideos.isNotEmpty()) Color.Black else TextSecondary,
+                    containerColor = if (detectedVideos.isNotEmpty()) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant
+                    },
+                    contentColor = if (detectedVideos.isNotEmpty()) {
+                        MaterialTheme.colorScheme.onPrimary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
                     elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 6.dp),
                     shape = CircleShape,
                     modifier = Modifier
@@ -479,7 +524,7 @@ fun BrowserScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .background(AmoledBlack)
+                .background(MaterialTheme.colorScheme.background)
         ) {
             // Start Page View (se acionada)
             if (isShowingStartPage) {
@@ -496,7 +541,12 @@ fun BrowserScreen(
                             .size(72.dp)
                             .clip(CircleShape)
                             .background(
-                                Brush.linearGradient(listOf(NeonCyan, NeonPurple))
+                                Brush.linearGradient(
+                                    listOf(
+                                        MaterialTheme.colorScheme.primary,
+                                        MaterialTheme.colorScheme.secondary
+                                    )
+                                )
                             ),
                         contentAlignment = Alignment.Center
                     ) {
@@ -512,13 +562,13 @@ fun BrowserScreen(
 
                     Text(
                         text = "1DM Video Hunter",
-                        color = TextPrimary,
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontWeight = FontWeight.Bold,
                         fontSize = 20.sp
                     )
                     Text(
                         text = "Navegue e capture vídeos MP4, WebM e MKV instantaneamente",
-                        color = TextSecondary,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 13.sp,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
@@ -528,7 +578,7 @@ fun BrowserScreen(
 
                     Text(
                         text = "Atalhos Rápidos de Teste",
-                        color = NeonCyan,
+                        color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 14.sp,
                         modifier = Modifier
@@ -544,7 +594,9 @@ fun BrowserScreen(
                     ) {
                         items(quickBookmarks) { bookmark ->
                             Card(
-                                colors = CardDefaults.cardColors(containerColor = AmoledSurfaceVariant),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                                ),
                                 shape = RoundedCornerShape(12.dp),
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -574,7 +626,7 @@ fun BrowserScreen(
                                     Spacer(modifier = Modifier.width(10.dp))
                                     Text(
                                         text = bookmark.title,
-                                        color = TextPrimary,
+                                        color = MaterialTheme.colorScheme.onSurface,
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Medium,
                                         maxLines = 2,
@@ -679,12 +731,25 @@ fun BrowserScreen(
         BatchDownloadSheet(
             detectedVideos = detectedVideos,
             selectedIds = selectedIds,
+            downloadFolderUri = downloadFolderUri,
             onToggleSelect = { id -> viewModel.toggleVideoSelection(id) },
             onToggleSelectAll = { viewModel.toggleSelectAll() },
             onDownloadSingle = { video -> viewModel.startSingleDownload(video) },
             onDownloadBatch = { viewModel.startBatchDownload() },
+            onRemoveSingle = { video -> viewModel.removeDetectedVideo(video) },
+            onRemoveSelected = { viewModel.removeSelectedDetectedVideos() },
             onClearAll = { viewModel.clearDetected() },
             onCancelActiveDownloads = { viewModel.cancelActiveDownloads() },
+            onChangeDownloadFolder = {
+                val initialUri = downloadFolderUri?.let {
+                    try {
+                        Uri.parse(it)
+                    } catch (_: Exception) {
+                        null
+                    }
+                }
+                openDocumentTreeLauncher.launch(initialUri)
+            },
             onDismiss = { viewModel.closeBatchSheet() }
         )
     }

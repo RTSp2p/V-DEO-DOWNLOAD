@@ -1,6 +1,13 @@
 package com.example.ui.home
 
+import android.content.Intent
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,29 +28,36 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.SelectAll
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -52,6 +66,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -62,14 +77,6 @@ import com.example.data.local.entity.CapturedVideoEntity
 import com.example.ui.player.InternalVideoPlayer
 import com.example.ui.theme.AccentGreen
 import com.example.ui.theme.AccentRed
-import com.example.ui.theme.AmoledBlack
-import com.example.ui.theme.AmoledOutline
-import com.example.ui.theme.AmoledSurface
-import com.example.ui.theme.AmoledSurfaceVariant
-import com.example.ui.theme.NeonCyan
-import com.example.ui.theme.NeonPurple
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
 import kotlinx.coroutines.flow.collectLatest
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -86,9 +93,30 @@ fun HomeScreen(
     val downloadingVideos by viewModel.downloadingVideos.collectAsStateWithLifecycle()
     val completedVideos by viewModel.completedVideos.collectAsStateWithLifecycle()
     val failedVideos by viewModel.failedVideos.collectAsStateWithLifecycle()
+    val selectedVideoIds by viewModel.selectedVideoIds.collectAsStateWithLifecycle()
+    val isSettingsDialogVisible by viewModel.isSettingsDialogVisible.collectAsStateWithLifecycle()
+    val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+    val downloadFolderUri by viewModel.downloadFolderUri.collectAsStateWithLifecycle()
     val activePlayingVideo by viewModel.activePlayingVideo.collectAsStateWithLifecycle()
 
+    val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
+
+    // SAF OpenDocumentTree Launcher para seleção de pasta de download personalizada
+    val openDocumentTreeLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                context.contentResolver.takePersistableUriPermission(uri, takeFlags)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            viewModel.setDownloadFolderUri(uri.toString())
+        }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.userMessage.collectLatest { msg ->
@@ -103,48 +131,69 @@ fun HomeScreen(
         HomeTab.FAILED -> failedVideos
     }
 
+    val allCurrentTabSelected = currentList.isNotEmpty() &&
+            currentList.all { selectedVideoIds.contains(it.id) }
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(AmoledSurface)
+                    .background(MaterialTheme.colorScheme.surface)
                     .statusBarsPadding()
             ) {
-                // Header Title
+                // Header Title + Settings Gear IconButton
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Box(
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Download,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                text = "Central de Downloads",
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 20.sp
+                            )
+                            Text(
+                                text = "${allVideos.size} tarefas registradas",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+
+                    // Ícone de engrenagem (Settings) na barra superior da Home
+                    IconButton(
+                        onClick = { viewModel.openSettingsDialog() },
                         modifier = Modifier
-                            .size(38.dp)
                             .clip(CircleShape)
-                            .background(NeonCyan.copy(alpha = 0.15f)),
-                        contentAlignment = Alignment.Center
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .testTag("home_settings_btn")
                     ) {
                         Icon(
-                            imageVector = Icons.Default.Download,
-                            contentDescription = null,
-                            tint = NeonCyan,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column {
-                        Text(
-                            text = "Central de Downloads",
-                            color = TextPrimary,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 20.sp
-                        )
-                        Text(
-                            text = "${allVideos.size} tarefas registradas",
-                            color = TextSecondary,
-                            fontSize = 12.sp
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = "Configurações",
+                            tint = MaterialTheme.colorScheme.primary
                         )
                     }
                 }
@@ -152,11 +201,11 @@ fun HomeScreen(
                 // PrimaryTabRow com 4 abas: TODOS, BAIXANDO, COMPLETOS, ERROS
                 PrimaryTabRow(
                     selectedTabIndex = selectedTab.ordinal,
-                    containerColor = AmoledSurface,
-                    contentColor = NeonCyan,
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = MaterialTheme.colorScheme.primary,
                     indicator = {
                         TabRowDefaults.PrimaryIndicator(
-                            color = NeonCyan,
+                            color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.tabIndicatorOffset(selectedTab.ordinal)
                         )
                     },
@@ -182,19 +231,23 @@ fun HomeScreen(
                                         text = tab.label,
                                         fontSize = 12.sp,
                                         fontWeight = if (selectedTab == tab) FontWeight.Bold else FontWeight.Medium,
-                                        color = if (selectedTab == tab) NeonCyan else TextSecondary
+                                        color = if (selectedTab == tab) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        }
                                     )
                                     if (count > 0) {
                                         Spacer(modifier = Modifier.width(4.dp))
                                         Badge(
                                             containerColor = when (tab) {
-                                                HomeTab.DOWNLOADING -> NeonCyan
-                                                HomeTab.COMPLETED -> NeonPurple
+                                                HomeTab.DOWNLOADING -> MaterialTheme.colorScheme.primary
+                                                HomeTab.COMPLETED -> MaterialTheme.colorScheme.secondary
                                                 HomeTab.FAILED -> AccentRed
-                                                HomeTab.ALL -> AmoledOutline
+                                                HomeTab.ALL -> MaterialTheme.colorScheme.outline
                                             },
                                             contentColor = when (tab) {
-                                                HomeTab.DOWNLOADING -> Color.Black
+                                                HomeTab.DOWNLOADING -> MaterialTheme.colorScheme.onPrimary
                                                 else -> Color.White
                                             }
                                         ) {
@@ -207,6 +260,74 @@ fun HomeScreen(
                         )
                     }
                 }
+
+                // Barra de Seleção em Lote e Limpeza de Histórico (visível quando há itens na aba atual)
+                AnimatedVisibility(visible = currentList.isNotEmpty()) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.75f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            // Botão / Checkbox "Selecionar Todos"
+                            TextButton(
+                                onClick = { viewModel.toggleSelectAllCurrentTab() },
+                                modifier = Modifier.testTag("home_select_all_btn")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.SelectAll,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (allCurrentTabSelected) "Desmarcar Todos" else "Selecionar Todos",
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+
+                            // Botão "Limpar do Histórico" para os cards selecionados
+                            Button(
+                                onClick = { viewModel.clearSelectedFromHistory() },
+                                enabled = selectedVideoIds.isNotEmpty(),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = AccentRed,
+                                    contentColor = Color.White,
+                                    disabledContainerColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                                    disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                ),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier
+                                    .height(36.dp)
+                                    .testTag("home_clear_history_btn")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.DeleteSweep,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (selectedVideoIds.isNotEmpty()) {
+                                        "Limpar do Histórico (${selectedVideoIds.size})"
+                                    } else {
+                                        "Limpar do Histórico"
+                                    },
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                }
             }
         },
         modifier = modifier
@@ -215,7 +336,7 @@ fun HomeScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .background(AmoledBlack)
+                .background(MaterialTheme.colorScheme.background)
         ) {
             if (currentList.isEmpty()) {
                 Box(
@@ -229,7 +350,7 @@ fun HomeScreen(
                             modifier = Modifier
                                 .size(72.dp)
                                 .clip(CircleShape)
-                                .background(AmoledSurfaceVariant),
+                                .background(MaterialTheme.colorScheme.surfaceVariant),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
@@ -240,7 +361,7 @@ fun HomeScreen(
                                     HomeTab.ALL -> Icons.Default.Movie
                                 },
                                 contentDescription = null,
-                                tint = TextSecondary,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(36.dp)
                             )
                         }
@@ -252,14 +373,14 @@ fun HomeScreen(
                                 HomeTab.FAILED -> "Nenhum erro registrado"
                                 HomeTab.ALL -> "Nenhum item na fila"
                             },
-                            color = TextPrimary,
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 16.sp
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = "Abra o Navegador para capturar e baixar novos vídeos.",
-                            color = TextSecondary,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 13.sp
                         )
                     }
@@ -272,8 +393,11 @@ fun HomeScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     items(currentList, key = { it.id }) { video ->
+                        val isSelected = selectedVideoIds.contains(video.id)
                         HomeDownloadCard(
                             video = video,
+                            isSelected = isSelected,
+                            onToggleSelect = { viewModel.toggleVideoSelection(video.id) },
                             onWatch = { viewModel.playVideo(video) },
                             onCancel = { viewModel.cancelDownload(video) },
                             onRetry = { viewModel.retryDownload(video) },
@@ -283,6 +407,27 @@ fun HomeScreen(
                 }
             }
         }
+    }
+
+    // Diálogo de Configurações (Tema e Pasta de Download SAF)
+    if (isSettingsDialogVisible) {
+        SettingsDialog(
+            currentThemeMode = themeMode,
+            downloadFolderUri = downloadFolderUri,
+            onSelectThemeMode = { mode -> viewModel.setThemeMode(mode) },
+            onSelectDownloadFolder = {
+                val initialUri = downloadFolderUri?.let {
+                    try {
+                        Uri.parse(it)
+                    } catch (_: Exception) {
+                        null
+                    }
+                }
+                openDocumentTreeLauncher.launch(initialUri)
+            },
+            onResetDownloadFolder = { viewModel.setDownloadFolderUri(null) },
+            onDismiss = { viewModel.closeSettingsDialog() }
+        )
     }
 
     // Video Player se o usuário clicar em "Assistir" a partir da Home
@@ -296,9 +441,12 @@ fun HomeScreen(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun HomeDownloadCard(
     video: CapturedVideoEntity,
+    isSelected: Boolean,
+    onToggleSelect: () -> Unit,
     onWatch: () -> Unit,
     onCancel: () -> Unit,
     onRetry: () -> Unit,
@@ -310,10 +458,21 @@ private fun HomeDownloadCard(
     val isFailed = video.downloadStatus == CapturedVideoEntity.STATUS_FAILED
 
     Card(
-        colors = CardDefaults.cardColors(containerColor = AmoledSurfaceVariant),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSelected) {
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+            } else {
+                MaterialTheme.colorScheme.surfaceVariant
+            }
+        ),
         shape = RoundedCornerShape(14.dp),
         modifier = modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .combinedClickable(
+                onClick = { onToggleSelect() },
+                onLongClick = { onToggleSelect() }
+            )
             .testTag("home_card_${video.id}")
     ) {
         Column(
@@ -325,6 +484,20 @@ private fun HomeDownloadCard(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // Checkbox para seleção individual ou em lote
+                Checkbox(
+                    checked = isSelected,
+                    onCheckedChange = { onToggleSelect() },
+                    colors = CheckboxDefaults.colors(
+                        checkedColor = MaterialTheme.colorScheme.primary,
+                        checkmarkColor = MaterialTheme.colorScheme.onPrimary,
+                        uncheckedColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    ),
+                    modifier = Modifier.testTag("home_card_checkbox_${video.id}")
+                )
+
+                Spacer(modifier = Modifier.width(6.dp))
+
                 // Media Icon
                 Box(
                     modifier = Modifier
@@ -332,10 +505,10 @@ private fun HomeDownloadCard(
                         .clip(RoundedCornerShape(10.dp))
                         .background(
                             when {
-                                isDownloading -> NeonCyan.copy(alpha = 0.15f)
-                                isCompleted -> NeonPurple.copy(alpha = 0.15f)
+                                isDownloading -> MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                                isCompleted -> MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f)
                                 isFailed -> AccentRed.copy(alpha = 0.15f)
-                                else -> AmoledOutline
+                                else -> MaterialTheme.colorScheme.outline
                             }
                         ),
                     contentAlignment = Alignment.Center
@@ -349,10 +522,10 @@ private fun HomeDownloadCard(
                         },
                         contentDescription = null,
                         tint = when {
-                            isDownloading -> NeonCyan
-                            isCompleted -> NeonPurple
+                            isDownloading -> MaterialTheme.colorScheme.primary
+                            isCompleted -> MaterialTheme.colorScheme.secondary
                             isFailed -> AccentRed
-                            else -> TextSecondary
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
                         },
                         modifier = Modifier.size(24.dp)
                     )
@@ -363,7 +536,7 @@ private fun HomeDownloadCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = video.fileName,
-                        color = TextPrimary,
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 14.sp,
                         maxLines = 1,
@@ -375,12 +548,12 @@ private fun HomeDownloadCard(
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(4.dp))
-                                .background(NeonPurple.copy(alpha = 0.25f))
+                                .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f))
                                 .padding(horizontal = 6.dp, vertical = 2.dp)
                         ) {
                             Text(
                                 text = video.fileType.uppercase(),
-                                color = NeonPurple,
+                                color = MaterialTheme.colorScheme.secondary,
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold
                             )
@@ -394,10 +567,10 @@ private fun HomeDownloadCard(
                                 .clip(RoundedCornerShape(4.dp))
                                 .background(
                                     when {
-                                        isDownloading -> NeonCyan.copy(alpha = 0.2f)
+                                        isDownloading -> MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
                                         isCompleted -> AccentGreen.copy(alpha = 0.2f)
                                         isFailed -> AccentRed.copy(alpha = 0.2f)
-                                        else -> AmoledOutline.copy(alpha = 0.5f)
+                                        else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
                                     }
                                 )
                                 .padding(horizontal = 6.dp, vertical = 2.dp)
@@ -410,10 +583,10 @@ private fun HomeDownloadCard(
                                     else -> "DETECTADO"
                                 },
                                 color = when {
-                                    isDownloading -> NeonCyan
+                                    isDownloading -> MaterialTheme.colorScheme.primary
                                     isCompleted -> AccentGreen
                                     isFailed -> AccentRed
-                                    else -> TextSecondary
+                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
                                 },
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold
@@ -424,7 +597,7 @@ private fun HomeDownloadCard(
 
                         Text(
                             text = formatFileSize(video.fileSizeBytes),
-                            color = TextSecondary,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 11.sp
                         )
                     }
@@ -435,8 +608,8 @@ private fun HomeDownloadCard(
             if (isDownloading) {
                 Spacer(modifier = Modifier.height(10.dp))
                 LinearProgressIndicator(
-                    color = NeonCyan,
-                    trackColor = AmoledOutline,
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.outline,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(4.dp)
@@ -454,7 +627,7 @@ private fun HomeDownloadCard(
             ) {
                 Text(
                     text = SimpleDateFormat("dd/MM/yy HH:mm", Locale.getDefault()).format(Date(video.capturedAt)),
-                    color = TextSecondary.copy(alpha = 0.6f),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                     fontSize = 11.sp
                 )
 
@@ -481,8 +654,8 @@ private fun HomeDownloadCard(
                         Button(
                             onClick = onRetry,
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = NeonCyan,
-                                contentColor = Color.Black
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
                             ),
                             shape = RoundedCornerShape(8.dp),
                             modifier = Modifier
@@ -499,10 +672,15 @@ private fun HomeDownloadCard(
                             modifier = Modifier
                                 .size(36.dp)
                                 .clip(RoundedCornerShape(8.dp))
-                                .background(AmoledOutline)
+                                .background(MaterialTheme.colorScheme.outline)
                                 .testTag("delete_failed_btn_${video.id}")
                         ) {
-                            Icon(imageVector = Icons.Default.Delete, contentDescription = "Remover", tint = TextSecondary, modifier = Modifier.size(18.dp))
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = "Remover",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp)
+                            )
                         }
                     }
 
@@ -510,8 +688,8 @@ private fun HomeDownloadCard(
                         Button(
                             onClick = onWatch,
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = NeonCyan,
-                                contentColor = Color.Black
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
                             ),
                             shape = RoundedCornerShape(8.dp),
                             modifier = Modifier

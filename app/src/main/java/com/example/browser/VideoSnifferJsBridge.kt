@@ -18,13 +18,19 @@ import java.util.Collections
  * MutationObserver, eventos de reprodução, varredura inicial) e também em respostas JSON
  * de APIs assíncronas (fetch / XMLHttpRequest), encaminhando-as para a camada de negócios
  * (ViewModel -> Room Database com OnConflictStrategy.IGNORE).
+ *
+ * Nota sobre Re-detecção: A verificação de duplicidade oficial ocorre exclusivamente no Room
+ * via @Index(unique = true) em videoUrl. Assim, quando um vídeo com status DETECTED é excluído
+ * fisicamente do banco (DELETE FROM captured_videos WHERE id = :id AND downloadStatus = 'DETECTED'),
+ * a URL fica livre para ser re-detectada caso o usuário permaneça ou recarregue a página.
  */
 class VideoSnifferJsBridge(
     private val onVideoDetected: (url: String, fileName: String, extension: String) -> Unit
 ) {
 
     private val bridgeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val processedUrls = Collections.synchronizedSet(mutableSetOf<String>())
+    // Controla apenas requisições HEAD simultâneas em voo para não duplicar chamadas de rede ao mesmo tempo
+    private val inFlightHeadUrls = Collections.synchronizedSet(mutableSetOf<String>())
 
     /**
      * Alias principal solicitado para recebimento de vídeos capturados via JSON APIs e DOM
@@ -51,11 +57,6 @@ class VideoSnifferJsBridge(
 
         // 2. Descartar manifestos e segmentos de streaming (HLS / DASH)
         if (isStreamingFragmentOrManifest(rawUrl)) {
-            return
-        }
-
-        // Evita reprocessar repetidamente a mesma URL na sessão da ponte antes de chegar ao Room
-        if (!processedUrls.add(rawUrl)) {
             return
         }
 
@@ -143,6 +144,7 @@ class VideoSnifferJsBridge(
     }
 
     private fun inspectDynamicMediaUrl(urlString: String, pageTitle: String?) {
+        if (!inFlightHeadUrls.add(urlString)) return
         bridgeScope.launch {
             try {
                 val cookie = try {
@@ -178,6 +180,8 @@ class VideoSnifferJsBridge(
                 }
             } catch (_: Exception) {
                 // Ignora falhas de rede silenciosamente em background
+            } finally {
+                inFlightHeadUrls.remove(urlString)
             }
         }
     }

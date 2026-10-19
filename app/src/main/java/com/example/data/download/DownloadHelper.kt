@@ -4,9 +4,11 @@ import android.app.DownloadManager
 import android.content.Context
 import android.net.Uri
 import android.os.Environment
+import android.provider.DocumentsContract
 import android.webkit.CookieManager
 import android.webkit.MimeTypeMap
 import com.example.browser.VideoSnifferJsBridge
+import java.io.File
 
 class DownloadHelper(private val context: Context) {
 
@@ -20,6 +22,10 @@ class DownloadHelper(private val context: Context) {
 
     @Volatile
     var currentUserAgent: String = VideoSnifferJsBridge.MODERN_MOBILE_USER_AGENT
+        private set
+
+    @Volatile
+    var customDownloadFolderUri: String? = null
         private set
 
     /**
@@ -36,7 +42,14 @@ class DownloadHelper(private val context: Context) {
     }
 
     /**
-     * Enqueues a video download to the public Downloads directory.
+     * Atualiza o URI da pasta personalizada escolhida via Storage Access Framework (SAF).
+     */
+    fun updateDownloadFolderUri(folderUri: String?) {
+        customDownloadFolderUri = folderUri?.takeIf { it.isNotBlank() }
+    }
+
+    /**
+     * Enqueues a video download to the configured directory (or public Downloads directory).
      * Returns the downloadId assigned by DownloadManager.
      */
     fun enqueueDownload(
@@ -44,7 +57,8 @@ class DownloadHelper(private val context: Context) {
         fileName: String,
         fileType: String,
         pageUrl: String? = null,
-        userAgent: String? = null
+        userAgent: String? = null,
+        targetFolderUri: String? = customDownloadFolderUri
     ): Long {
         return try {
             val sanitizedFileName = sanitizeFileName(fileName, fileType)
@@ -91,21 +105,126 @@ class DownloadHelper(private val context: Context) {
                     addRequestHeader("Referer", effectivePageUrl)
                 }
 
-                // Direct file to public Downloads directory
-                setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, sanitizedFileName)
+                // 4. Configura o destino considerando a pasta personalizada (SAF) se aplicável
+                configureDestination(this, sanitizedFileName, targetFolderUri)
 
-                val mimeType = when (fileType.lowercase()) {
-                    "mp4" -> "video/mp4"
-                    "webm" -> "video/webm"
-                    "mkv" -> "video/x-matroska"
-                    else -> MimeTypeMap.getSingleton().getMimeTypeFromExtension(fileType) ?: "video/*"
-                }
+                val mimeType = resolveMimeType(fileType)
                 setMimeType(mimeType)
             }
             downloadManager.enqueue(request)
         } catch (e: Exception) {
             e.printStackTrace()
             -1L
+        }
+    }
+
+    private fun configureDestination(
+        request: DownloadManager.Request,
+        sanitizedFileName: String,
+        targetFolderUri: String?
+    ) {
+        if (!targetFolderUri.isNullOrBlank()) {
+            try {
+                val treeUri = Uri.parse(targetFolderUri)
+                val treeDocId = DocumentsContract.getTreeDocumentId(treeUri) ?: ""
+                if (treeDocId.startsWith("primary:", ignoreCase = true)) {
+                    val relativePath = treeDocId.substringAfter("primary:").trim('/')
+                    when {
+                        relativePath.equals(Environment.DIRECTORY_DOWNLOADS, ignoreCase = true) -> {
+                            request.setDestinationInExternalPublicDir(
+                                Environment.DIRECTORY_DOWNLOADS,
+                                sanitizedFileName
+                            )
+                            return
+                        }
+                        relativePath.startsWith("${Environment.DIRECTORY_DOWNLOADS}/", ignoreCase = true) -> {
+                            val subPath = relativePath.substringAfter("/")
+                            request.setDestinationInExternalPublicDir(
+                                Environment.DIRECTORY_DOWNLOADS,
+                                "$subPath/$sanitizedFileName"
+                            )
+                            return
+                        }
+                        relativePath.isNotEmpty() -> {
+                            val topDir = relativePath.substringBefore("/")
+                            val subDir = relativePath.substringAfter("/", "")
+                            val targetSubPath = if (subDir.isNotEmpty()) {
+                                "$subDir/$sanitizedFileName"
+                            } else {
+                                sanitizedFileName
+                            }
+                            request.setDestinationInExternalPublicDir(topDir, targetSubPath)
+                            return
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                // Fallback seguro para DIRECTORY_DOWNLOADS e cópia via SAF no término
+            }
+        }
+        request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, sanitizedFileName)
+    }
+
+    /**
+     * Se uma pasta SAF personalizada foi configurada e o arquivo baixado ainda não está
+     * dentro da árvore SAF, copia/transfere o arquivo para o DocumentTree escolhido pelo usuário.
+     */
+    fun transferToSafFolderIfNeeded(
+        downloadedLocalUri: String?,
+        fileName: String,
+        fileType: String,
+        safTreeUriString: String? = customDownloadFolderUri
+    ): String? {
+        if (safTreeUriString.isNullOrBlank() || downloadedLocalUri.isNullOrBlank()) {
+            return downloadedLocalUri
+        }
+        return try {
+            val treeUri = Uri.parse(safTreeUriString)
+            val treeDocId = DocumentsContract.getTreeDocumentId(treeUri) ?: return downloadedLocalUri
+            val parentDocUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, treeDocId)
+
+            val sanitizedName = sanitizeFileName(fileName, fileType)
+            val mimeType = resolveMimeType(fileType)
+
+            val createdDocUri = DocumentsContract.createDocument(
+                context.contentResolver,
+                parentDocUri,
+                mimeType,
+                sanitizedName
+            ) ?: return downloadedLocalUri
+
+            val sourceUri = Uri.parse(downloadedLocalUri)
+            var copiedBytes = 0L
+
+            context.contentResolver.openInputStream(sourceUri)?.use { input ->
+                context.contentResolver.openOutputStream(createdDocUri)?.use { output ->
+                    copiedBytes = input.copyTo(output)
+                }
+            }
+
+            if (copiedBytes > 0L) {
+                // Remove arquivo temporário de origem se for file:// duplicado
+                if (sourceUri.scheme == "file") {
+                    val oldFile = File(sourceUri.path ?: "")
+                    if (oldFile.exists()) {
+                        oldFile.delete()
+                    }
+                }
+                createdDocUri.toString()
+            } else {
+                downloadedLocalUri
+            }
+        } catch (_: Exception) {
+            downloadedLocalUri
+        }
+    }
+
+    fun resolveMimeType(fileType: String): String {
+        return when (fileType.lowercase().removePrefix(".")) {
+            "mp4" -> "video/mp4"
+            "webm" -> "video/webm"
+            "mkv" -> "video/x-matroska"
+            else -> MimeTypeMap.getSingleton().getMimeTypeFromExtension(fileType) ?: "video/*"
         }
     }
 

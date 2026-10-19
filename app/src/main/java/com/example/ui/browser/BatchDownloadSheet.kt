@@ -1,6 +1,5 @@
 package com.example.ui.browser
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -8,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -21,8 +21,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material3.AlertDialog
@@ -38,12 +40,15 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -61,26 +66,24 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.data.local.entity.CapturedVideoEntity
+import com.example.data.repository.SettingsRepository
 import com.example.ui.theme.AccentRed
-import com.example.ui.theme.AmoledOutline
-import com.example.ui.theme.AmoledSurface
-import com.example.ui.theme.AmoledSurfaceVariant
-import com.example.ui.theme.NeonCyan
-import com.example.ui.theme.NeonPurple
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BatchDownloadSheet(
     detectedVideos: List<CapturedVideoEntity>,
     selectedIds: Set<Long>,
+    downloadFolderUri: String? = null,
     onToggleSelect: (Long) -> Unit,
     onToggleSelectAll: () -> Unit,
     onDownloadSingle: (CapturedVideoEntity) -> Unit,
     onDownloadBatch: () -> Unit,
+    onRemoveSingle: (CapturedVideoEntity) -> Unit,
+    onRemoveSelected: () -> Unit = {},
     onClearAll: () -> Unit,
     onCancelActiveDownloads: () -> Unit,
+    onChangeDownloadFolder: () -> Unit = {},
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -92,7 +95,7 @@ fun BatchDownloadSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = AmoledSurface,
+        containerColor = MaterialTheme.colorScheme.surface,
         dragHandle = {
             Box(
                 modifier = Modifier
@@ -100,7 +103,7 @@ fun BatchDownloadSheet(
                     .width(44.dp)
                     .height(4.dp)
                     .clip(CircleShape)
-                    .background(AmoledOutline)
+                    .background(MaterialTheme.colorScheme.outline)
             )
         },
         modifier = modifier
@@ -122,13 +125,13 @@ fun BatchDownloadSheet(
                         modifier = Modifier
                             .size(36.dp)
                             .clip(CircleShape)
-                            .background(NeonPurple.copy(alpha = 0.2f)),
+                            .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.2f)),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Default.Movie,
                             contentDescription = null,
-                            tint = NeonPurple,
+                            tint = MaterialTheme.colorScheme.secondary,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -136,14 +139,16 @@ fun BatchDownloadSheet(
                     Column {
                         Text(
                             text = stringResource(R.string.detected_videos),
-                            color = TextPrimary,
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontWeight = FontWeight.Bold,
                             fontSize = 18.sp
                         )
                         Text(
-                            text = "${detectedVideos.size} itens capturados nesta sessão",
-                            color = TextSecondary,
-                            fontSize = 12.sp
+                            text = "${detectedVideos.size} itens capturados • Pasta: ${SettingsRepository.formatReadableFolderPath(downloadFolderUri)}",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
@@ -156,7 +161,7 @@ fun BatchDownloadSheet(
                     Icon(
                         imageVector = Icons.Default.Close,
                         contentDescription = "Fechar janela",
-                        tint = TextSecondary
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -175,20 +180,20 @@ fun BatchDownloadSheet(
                         Icon(
                             imageVector = Icons.Default.Movie,
                             contentDescription = null,
-                            tint = TextSecondary.copy(alpha = 0.5f),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
                             modifier = Modifier.size(56.dp)
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
                             text = stringResource(R.string.empty_detected_title),
-                            color = TextPrimary,
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 16.sp
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = stringResource(R.string.empty_detected_desc),
-                            color = TextSecondary,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 13.sp
                         )
                     }
@@ -196,7 +201,7 @@ fun BatchDownloadSheet(
             } else {
                 // Batch Action Bar (Select All + Selected Count)
                 Surface(
-                    color = AmoledSurfaceVariant,
+                    color = MaterialTheme.colorScheme.surfaceVariant,
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -217,16 +222,16 @@ fun BatchDownloadSheet(
                                 checked = allSelected,
                                 onCheckedChange = { onToggleSelectAll() },
                                 colors = CheckboxDefaults.colors(
-                                    checkedColor = NeonCyan,
-                                    checkmarkColor = Color.Black,
-                                    uncheckedColor = TextSecondary
+                                    checkedColor = MaterialTheme.colorScheme.primary,
+                                    checkmarkColor = MaterialTheme.colorScheme.onPrimary,
+                                    uncheckedColor = MaterialTheme.colorScheme.onSurfaceVariant
                                 ),
                                 modifier = Modifier.testTag("select_all_checkbox")
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
                                 text = if (allSelected) "Desmarcar Todos" else stringResource(R.string.select_all),
-                                color = TextPrimary,
+                                color = MaterialTheme.colorScheme.onSurface,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Medium
                             )
@@ -234,7 +239,7 @@ fun BatchDownloadSheet(
 
                         Text(
                             text = "${selectedIds.size} selecionados",
-                            color = NeonCyan,
+                            color = MaterialTheme.colorScheme.primary,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold
                         )
@@ -243,7 +248,7 @@ fun BatchDownloadSheet(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // List of Detected Media Cards
+                // List of Detected Media Cards with SwipeToDismissBox (EndToStart / Swipe Left)
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -254,93 +259,157 @@ fun BatchDownloadSheet(
                         val isSelected = selectedIds.contains(video.id)
                         val isDownloading = video.downloadStatus == CapturedVideoEntity.STATUS_DOWNLOADING
 
-                        Card(
-                            colors = CardDefaults.cardColors(
-                                containerColor = if (isSelected) {
-                                    NeonCyan.copy(alpha = 0.08f)
+                        val dismissState = rememberSwipeToDismissBoxState(
+                            confirmValueChange = { dismissValue ->
+                                if (dismissValue == SwipeToDismissBoxValue.EndToStart) {
+                                    onRemoveSingle(video)
+                                    true
                                 } else {
-                                    AmoledSurfaceVariant.copy(alpha = 0.65f)
+                                    false
                                 }
-                            ),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("detected_video_item_${video.id}")
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Checkbox(
-                                    checked = isSelected,
-                                    onCheckedChange = { onToggleSelect(video.id) },
-                                    colors = CheckboxDefaults.colors(
-                                        checkedColor = NeonCyan,
-                                        checkmarkColor = Color.Black,
-                                        uncheckedColor = TextSecondary
-                                    ),
-                                    modifier = Modifier.testTag("checkbox_${video.id}")
-                                )
+                            }
+                        )
 
-                                Spacer(modifier = Modifier.width(8.dp))
-
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = video.fileName,
-                                        color = TextPrimary,
-                                        fontWeight = FontWeight.Medium,
-                                        fontSize = 14.sp,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(4.dp))
-                                                .background(NeonPurple.copy(alpha = 0.25f))
-                                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                                        ) {
-                                            Text(
-                                                text = video.fileType.uppercase(),
-                                                color = NeonPurple,
-                                                fontSize = 10.sp,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        }
-
-                                        Spacer(modifier = Modifier.width(8.dp))
-
-                                        Text(
-                                            text = if (isDownloading) "Baixando..." else "Pronto para download",
-                                            color = if (isDownloading) NeonCyan else TextSecondary,
-                                            fontSize = 11.sp
-                                        )
-                                    }
-                                }
-
-                                Spacer(modifier = Modifier.width(8.dp))
-
-                                // Individual Download Button
-                                IconButton(
-                                    onClick = { onDownloadSingle(video) },
-                                    enabled = !isDownloading,
+                        SwipeToDismissBox(
+                            state = dismissState,
+                            enableDismissFromStartToEnd = false,
+                            enableDismissFromEndToStart = true,
+                            backgroundContent = {
+                                Box(
                                     modifier = Modifier
-                                        .size(40.dp)
-                                        .clip(CircleShape)
-                                        .background(
-                                            if (isDownloading) AmoledOutline else NeonCyan.copy(alpha = 0.15f)
-                                        )
-                                        .testTag("download_single_btn_${video.id}")
+                                        .fillMaxSize()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(MaterialTheme.colorScheme.errorContainer)
+                                        .padding(horizontal = 20.dp),
+                                    contentAlignment = Alignment.CenterEnd
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Default.Download,
-                                        contentDescription = "Baixar",
-                                        tint = if (isDownloading) TextSecondary else NeonCyan,
-                                        modifier = Modifier.size(20.dp)
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = "Remover vídeo detectado",
+                                        tint = MaterialTheme.colorScheme.onErrorContainer,
+                                        modifier = Modifier.size(24.dp)
                                     )
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("swipe_detected_video_${video.id}")
+                        ) {
+                            Card(
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (isSelected) {
+                                        MaterialTheme.colorScheme.surfaceVariant
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f)
+                                    }
+                                ),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("detected_video_item_${video.id}")
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Checkbox(
+                                        checked = isSelected,
+                                        onCheckedChange = { onToggleSelect(video.id) },
+                                        colors = CheckboxDefaults.colors(
+                                            checkedColor = MaterialTheme.colorScheme.primary,
+                                            checkmarkColor = MaterialTheme.colorScheme.onPrimary,
+                                            uncheckedColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                        ),
+                                        modifier = Modifier.testTag("checkbox_${video.id}")
+                                    )
+
+                                    Spacer(modifier = Modifier.width(8.dp))
+
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = video.fileName,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            fontWeight = FontWeight.Medium,
+                                            fontSize = 14.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f))
+                                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                            ) {
+                                                Text(
+                                                    text = video.fileType.uppercase(),
+                                                    color = MaterialTheme.colorScheme.secondary,
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+
+                                            Spacer(modifier = Modifier.width(8.dp))
+
+                                            Text(
+                                                text = if (isDownloading) "Baixando..." else "Arraste p/ esquerda p/ excluir",
+                                                color = if (isDownloading) {
+                                                    MaterialTheme.colorScheme.primary
+                                                } else {
+                                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                                },
+                                                fontSize = 11.sp
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.width(6.dp))
+
+                                    // Individual Delete Button (além do gesto SwipeToDismissBox)
+                                    IconButton(
+                                        onClick = { onRemoveSingle(video) },
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .testTag("remove_detected_btn_${video.id}")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Delete,
+                                            contentDescription = "Remover item detectado",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+
+                                    // Individual Download Button
+                                    IconButton(
+                                        onClick = { onDownloadSingle(video) },
+                                        enabled = !isDownloading,
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .clip(CircleShape)
+                                            .background(
+                                                if (isDownloading) {
+                                                    MaterialTheme.colorScheme.outline
+                                                } else {
+                                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                                                }
+                                            )
+                                            .testTag("download_single_btn_${video.id}")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Download,
+                                            contentDescription = "Baixar",
+                                            tint = if (isDownloading) {
+                                                MaterialTheme.colorScheme.onSurfaceVariant
+                                            } else {
+                                                MaterialTheme.colorScheme.primary
+                                            },
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -355,13 +424,13 @@ fun BatchDownloadSheet(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    // Botão de Ações no Canto Inferior Esquerdo (Limpar Todos / Cancelar Download)
+                    // Botão de Ações no Canto Inferior Esquerdo
                     Box {
                         FilledTonalButton(
                             onClick = { showActionsMenu = true },
                             colors = ButtonDefaults.filledTonalButtonColors(
-                                containerColor = AmoledSurfaceVariant,
-                                contentColor = TextPrimary
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                contentColor = MaterialTheme.colorScheme.onSurface
                             ),
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier
@@ -371,7 +440,7 @@ fun BatchDownloadSheet(
                             Icon(
                                 imageVector = Icons.Default.MoreVert,
                                 contentDescription = "Mais Ações",
-                                tint = NeonCyan,
+                                tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(20.dp)
                             )
                             Spacer(modifier = Modifier.width(4.dp))
@@ -381,8 +450,61 @@ fun BatchDownloadSheet(
                         DropdownMenu(
                             expanded = showActionsMenu,
                             onDismissRequest = { showActionsMenu = false },
-                            modifier = Modifier.background(AmoledSurfaceVariant)
+                            modifier = Modifier.background(MaterialTheme.colorScheme.surfaceVariant)
                         ) {
+                            // 1. Atalho solicitado: "Alterar Pasta de Download" via SAF
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = Icons.Default.FolderOpen,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "Alterar Pasta de Download",
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            fontSize = 14.sp
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    showActionsMenu = false
+                                    onChangeDownloadFolder()
+                                },
+                                modifier = Modifier.testTag("change_download_folder_menu_item")
+                            )
+
+                            // 2. Remover Selecionados (exclusão em lote do Room)
+                            if (selectedIds.isNotEmpty()) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                imageVector = Icons.Default.Delete,
+                                                contentDescription = null,
+                                                tint = AccentRed,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = "Remover Selecionados (${selectedIds.size})",
+                                                color = AccentRed,
+                                                fontSize = 14.sp
+                                            )
+                                        }
+                                    },
+                                    onClick = {
+                                        showActionsMenu = false
+                                        onRemoveSelected()
+                                    },
+                                    modifier = Modifier.testTag("remove_selected_detected_menu_item")
+                                )
+                            }
+
+                            // 3. Limpar Todos os Detectados
                             DropdownMenuItem(
                                 text = {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -403,17 +525,22 @@ fun BatchDownloadSheet(
                                 modifier = Modifier.testTag("clear_all_detected_menu_item")
                             )
 
+                            // 4. Cancelar Downloads Ativos
                             DropdownMenuItem(
                                 text = {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Icon(
                                             imageVector = Icons.Default.Cancel,
                                             contentDescription = null,
-                                            tint = NeonPurple,
+                                            tint = MaterialTheme.colorScheme.secondary,
                                             modifier = Modifier.size(18.dp)
                                         )
                                         Spacer(modifier = Modifier.width(8.dp))
-                                        Text("Cancelar Downloads Ativos", color = TextPrimary, fontSize = 14.sp)
+                                        Text(
+                                            text = "Cancelar Downloads Ativos",
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            fontSize = 14.sp
+                                        )
                                     }
                                 },
                                 onClick = {
@@ -430,10 +557,10 @@ fun BatchDownloadSheet(
                         onClick = onDownloadBatch,
                         enabled = selectedIds.isNotEmpty(),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = NeonCyan,
-                            contentColor = Color.Black,
-                            disabledContainerColor = AmoledOutline,
-                            disabledContentColor = TextSecondary
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
+                            disabledContainerColor = MaterialTheme.colorScheme.outline,
+                            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant
                         ),
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier
@@ -462,18 +589,18 @@ fun BatchDownloadSheet(
     if (showClearConfirmationDialog) {
         AlertDialog(
             onDismissRequest = { showClearConfirmationDialog = false },
-            containerColor = AmoledSurface,
+            containerColor = MaterialTheme.colorScheme.surface,
             title = {
                 Text(
                     text = "Limpar Vídeos Detectados?",
-                    color = TextPrimary,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.Bold
                 )
             },
             text = {
                 Text(
-                    text = "Deseja remover todos os vídeos detectados da lista? Os arquivos que já estão em download ou concluídos não serão afetados.",
-                    color = TextSecondary,
+                    text = "Deseja remover fisicamente todos os vídeos detectados da lista? Eles poderão ser detectados novamente se a página for recarregada.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 14.sp
                 )
             },
@@ -494,7 +621,7 @@ fun BatchDownloadSheet(
             },
             dismissButton = {
                 TextButton(onClick = { showClearConfirmationDialog = false }) {
-                    Text("Cancelar", color = TextSecondary)
+                    Text("Cancelar", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         )
