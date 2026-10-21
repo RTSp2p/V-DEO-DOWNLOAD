@@ -35,6 +35,12 @@ class VideoSnifferWebViewClient(
         injectMediaSnifferScript(view)
     }
 
+    override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
+        super.doUpdateVisitedHistory(view, url, isReload)
+        url?.let { onPageFinishedCallback(it, view?.title) }
+        injectMediaSnifferScript(view)
+    }
+
     override fun onLoadResource(view: WebView?, url: String?) {
         super.onLoadResource(view, url)
         injectMediaSnifferScript(view)

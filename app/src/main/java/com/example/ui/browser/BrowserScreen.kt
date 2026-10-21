@@ -127,7 +127,7 @@ fun BrowserScreen(
     val progress by viewModel.progress.collectAsStateWithLifecycle()
     val selectedIds by viewModel.selectedIds.collectAsStateWithLifecycle()
     val isBatchSheetVisible by viewModel.isBatchSheetVisible.collectAsStateWithLifecycle()
-    val isSnifferEnabled by viewModel.isSnifferEnabled.collectAsStateWithLifecycle()
+    val isCaptureEnabled by viewModel.isCaptureEnabled.collectAsStateWithLifecycle()
     val browsingHistory by viewModel.browsingHistory.collectAsStateWithLifecycle()
     val isHistoryDialogVisible by viewModel.isHistoryDialogVisible.collectAsStateWithLifecycle()
 
@@ -140,8 +140,8 @@ fun BrowserScreen(
     val focusManager = LocalFocusManager.current
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // Bundle para salvar e restaurar o estado da WebView
-    val webViewStateBundle = rememberSaveable { Bundle() }
+    // Bundle para salvar e restaurar o estado da WebView no escopo da ViewModel
+    val webViewStateBundle = viewModel.webViewStateBundle
 
     // SAF OpenDocumentTree Launcher para seleção de pasta de download a partir do menu da janela de vídeos detectados
     val openDocumentTreeLauncher = rememberLauncherForActivityResult(
@@ -167,8 +167,18 @@ fun BrowserScreen(
     }
 
     LaunchedEffect(currentUrl) {
-        if (!isShowingStartPage) {
+        if (!isShowingStartPage && currentUrl != "about:blank") {
             urlInputText = currentUrl
+        }
+    }
+
+    // Quando a captura é reativada pelo usuário, força uma nova varredura imediata na página atual
+    LaunchedEffect(isCaptureEnabled) {
+        if (isCaptureEnabled) {
+            webViewInstance?.evaluateJavascript(
+                "if (window.__1dmScanMedia) window.__1dmScanMedia();",
+                null
+            )
         }
     }
 
@@ -180,6 +190,9 @@ fun BrowserScreen(
     // Salvar estado ao sair
     DisposableEffect(Unit) {
         onDispose {
+            webViewInstance?.url?.takeIf { it.isNotBlank() && it != "about:blank" }?.let { activeUrl ->
+                viewModel.saveLastVisitedUrl(activeUrl)
+            }
             webViewInstance?.saveState(webViewStateBundle)
         }
     }
@@ -205,6 +218,7 @@ fun BrowserScreen(
         }
         urlInputText = finalUrl
         isShowingStartPage = false
+        viewModel.saveLastVisitedUrl(finalUrl)
         webViewInstance?.loadUrl(finalUrl)
     }
 
@@ -363,7 +377,7 @@ fun BrowserScreen(
                             onDismissRequest = { showOptionsMenu = false },
                             modifier = Modifier.background(MaterialTheme.colorScheme.surfaceVariant)
                         ) {
-                            // 1. "Começar Captura" (Checkbox toggle)
+                            // 1. "Começar Captura" (Checkbox toggle com persistência em DataStore)
                             DropdownMenuItem(
                                 text = {
                                     Row(
@@ -371,8 +385,8 @@ fun BrowserScreen(
                                         modifier = Modifier.fillMaxWidth()
                                     ) {
                                         Checkbox(
-                                            checked = isSnifferEnabled,
-                                            onCheckedChange = { viewModel.setSnifferEnabled(it) },
+                                            checked = isCaptureEnabled,
+                                            onCheckedChange = { viewModel.setCaptureEnabled(it) },
                                             colors = CheckboxDefaults.colors(
                                                 checkedColor = MaterialTheme.colorScheme.primary,
                                                 checkmarkColor = MaterialTheme.colorScheme.onPrimary,
@@ -389,7 +403,7 @@ fun BrowserScreen(
                                     }
                                 },
                                 onClick = {
-                                    viewModel.setSnifferEnabled(!isSnifferEnabled)
+                                    viewModel.setCaptureEnabled(!isCaptureEnabled)
                                 },
                                 modifier = Modifier.testTag("toggle_sniffer_menu_item")
                             )
@@ -673,7 +687,9 @@ fun BrowserScreen(
 
                             val jsBridge = VideoSnifferJsBridge(
                                 onVideoDetected = { url, fileName, ext ->
-                                    viewModel.onVideoSniffed(url, fileName, ext)
+                                    if (viewModel.isCaptureEnabled.value) {
+                                        viewModel.onVideoDetected(url, fileName, ext)
+                                    }
                                 }
                             )
                             addJavascriptInterface(jsBridge, VideoSnifferJsBridge.INTERFACE_NAME)
@@ -681,19 +697,28 @@ fun BrowserScreen(
 
                             webViewClient = VideoSnifferWebViewClient(
                                 onVideoDetected = { url, fileName, ext ->
-                                    viewModel.onVideoSniffed(url, fileName, ext)
+                                    // Mantém a lógica de detecção de vídeo existente
+                                    if (viewModel.isCaptureEnabled.value) {
+                                        viewModel.onVideoDetected(url, fileName, ext)
+                                    }
                                 },
-                                onPageStartedCallback = { url ->
+                                onPageStartedCallback = { startedUrl ->
                                     viewModel.setLoading(true)
-                                    urlInputText = url
-                                    viewModel.updateUrl(url)
-                                    viewModel.updateWebViewContext(url, settings.userAgentString)
+                                    if (startedUrl != "about:blank" && startedUrl.isNotBlank()) {
+                                        urlInputText = startedUrl
+                                        viewModel.saveLastVisitedUrl(startedUrl)
+                                        viewModel.updateWebViewContext(startedUrl, settings.userAgentString)
+                                    }
                                 },
-                                onPageFinishedCallback = { url, title ->
+                                onPageFinishedCallback = { finalUrl, title ->
                                     viewModel.setLoading(false)
+                                    // CORREÇÃO: Salva automaticamente a URL no disco a cada término de carregamento
+                                    if (finalUrl != "about:blank" && finalUrl.isNotBlank()) {
+                                        urlInputText = finalUrl
+                                        viewModel.saveLastVisitedUrl(finalUrl)
+                                        viewModel.updateWebViewContext(finalUrl, settings.userAgentString)
+                                    }
                                     viewModel.setPageTitle(title)
-                                    urlInputText = url
-                                    viewModel.updateWebViewContext(url, settings.userAgentString)
                                 }
                             )
 

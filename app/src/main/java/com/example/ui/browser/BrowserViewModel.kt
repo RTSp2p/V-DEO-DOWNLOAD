@@ -1,5 +1,6 @@
 package com.example.ui.browser
 
+import android.os.Bundle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -23,6 +25,9 @@ class BrowserViewModel(
     private val sessionManager: SessionManager,
     private val settingsRepository: SettingsRepository? = null
 ) : ViewModel() {
+
+    // Bundle persistido no escopo da ViewModel para preservar estado da WebView entre trocas de abas
+    val webViewStateBundle: Bundle = Bundle()
 
     // Detected videos from Room (status DETECTED)
     val detectedVideos: StateFlow<List<CapturedVideoEntity>> = repository.observeDetectedVideos()
@@ -40,9 +45,9 @@ class BrowserViewModel(
             initialValue = null
         )
 
-    // Current page URL with session restoration
+    // Current page URL with session restoration from DataStore
     private val _currentUrl = MutableStateFlow(
-        sessionManager.getLastUrl() ?: "https://html5test.com"
+        sessionManager.getLastUrl() ?: DEFAULT_HOME_URL
     )
     val currentUrl: StateFlow<String> = _currentUrl.asStateFlow()
 
@@ -55,9 +60,10 @@ class BrowserViewModel(
     private val _progress = MutableStateFlow(0)
     val progress: StateFlow<Int> = _progress.asStateFlow()
 
-    // Chave de controle (toggle booleano) para pausar ou retomar a detecção do video sniffer
-    private val _isSnifferEnabled = MutableStateFlow(true)
-    val isSnifferEnabled: StateFlow<Boolean> = _isSnifferEnabled.asStateFlow()
+    // Chave de controle persistente (DataStore) para pausar ou retomar a detecção do video sniffer
+    private val _isCaptureEnabled = MutableStateFlow(sessionManager.isCaptureEnabled())
+    val isCaptureEnabled: StateFlow<Boolean> = _isCaptureEnabled.asStateFlow()
+    val isSnifferEnabled: StateFlow<Boolean> = _isCaptureEnabled.asStateFlow()
 
     // Histórico de navegação
     val browsingHistory: StateFlow<List<BrowsingHistoryEntity>> = repository.observeBrowsingHistory()
@@ -82,10 +88,40 @@ class BrowserViewModel(
     private val _userMessage = MutableSharedFlow<String>()
     val userMessage: SharedFlow<String> = _userMessage.asSharedFlow()
 
+    init {
+        viewModelScope.launch {
+            sessionManager.isCaptureEnabledFlow.collectLatest { enabled ->
+                _isCaptureEnabled.value = enabled
+            }
+        }
+        viewModelScope.launch {
+            sessionManager.lastUrlFlow.collectLatest { savedUrl ->
+                if (!savedUrl.isNullOrBlank() && savedUrl != "about:blank" && _currentUrl.value == DEFAULT_HOME_URL) {
+                    _currentUrl.value = savedUrl
+                }
+            }
+        }
+    }
+
+    /**
+     * Salva automaticamente a URL no disco/DataStore e sincroniza o estado atual da ViewModel.
+     */
+    fun saveLastVisitedUrl(url: String) {
+        val cleanUrl = url.trim()
+        if (cleanUrl.isNotBlank() &&
+            cleanUrl != "about:blank" &&
+            !cleanUrl.startsWith("about:") &&
+            !cleanUrl.startsWith("chrome:") &&
+            !cleanUrl.startsWith("javascript:")
+        ) {
+            _currentUrl.value = cleanUrl
+            sessionManager.saveLastUrl(cleanUrl)
+            repository.updateWebViewContext(pageUrl = cleanUrl, userAgent = null)
+        }
+    }
+
     fun updateUrl(newUrl: String) {
-        _currentUrl.value = newUrl
-        sessionManager.saveLastUrl(newUrl)
-        repository.updateWebViewContext(pageUrl = newUrl, userAgent = null)
+        saveLastVisitedUrl(newUrl)
     }
 
     fun updateWebViewContext(pageUrl: String?, userAgent: String?) {
@@ -97,7 +133,7 @@ class BrowserViewModel(
         _pageTitle.value = resolved
         // Registra visita no histórico
         val url = _currentUrl.value
-        if (url.isNotBlank() && !url.startsWith("about:") && !url.startsWith("chrome:")) {
+        if (url.isNotBlank() && url != "about:blank" && !url.startsWith("about:") && !url.startsWith("chrome:")) {
             viewModelScope.launch {
                 repository.recordBrowsingVisit(url, resolved)
             }
@@ -112,8 +148,9 @@ class BrowserViewModel(
         _progress.value = prog
     }
 
-    fun setSnifferEnabled(enabled: Boolean) {
-        _isSnifferEnabled.value = enabled
+    fun setCaptureEnabled(enabled: Boolean) {
+        _isCaptureEnabled.value = enabled
+        sessionManager.saveCaptureEnabled(enabled)
         viewModelScope.launch {
             if (enabled) {
                 _userMessage.emit("Captura de vídeo ativada")
@@ -121,6 +158,14 @@ class BrowserViewModel(
                 _userMessage.emit("Captura de vídeo pausada")
             }
         }
+    }
+
+    fun toggleCaptureEnabled() {
+        setCaptureEnabled(!_isCaptureEnabled.value)
+    }
+
+    fun setSnifferEnabled(enabled: Boolean) {
+        setCaptureEnabled(enabled)
     }
 
     fun openHistoryDialog() {
@@ -168,9 +213,9 @@ class BrowserViewModel(
         }
     }
 
-    fun onVideoSniffed(url: String, fileName: String, extension: String) {
+    fun onVideoDetected(url: String, fileName: String, extension: String) {
         // Se a captura estiver pausada pelo usuário, descarta imediatamente
-        if (!_isSnifferEnabled.value) return
+        if (!_isCaptureEnabled.value) return
 
         viewModelScope.launch {
             val entity = CapturedVideoEntity(
@@ -185,6 +230,10 @@ class BrowserViewModel(
                 _userMessage.emit("Vídeo capturado: $fileName")
             }
         }
+    }
+
+    fun onVideoSniffed(url: String, fileName: String, extension: String) {
+        onVideoDetected(url, fileName, extension)
     }
 
     fun startSingleDownload(video: CapturedVideoEntity) {
@@ -267,6 +316,10 @@ class BrowserViewModel(
             repository.updateDownloadFolderUri(uriString)
             _userMessage.emit("Pasta de download atualizada!")
         }
+    }
+
+    companion object {
+        const val DEFAULT_HOME_URL = "https://html5test.com"
     }
 
     class Factory(
