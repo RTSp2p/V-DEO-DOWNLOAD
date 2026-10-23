@@ -318,7 +318,10 @@ fun DownloadsScreen(
         val uriToPlay = playingVideo.localUri ?: playingVideo.videoUrl
         InternalVideoPlayer(
             videoUriString = uriToPlay,
-            videoTitle = playingVideo.fileName,
+            videoTitle = playingVideo.title.ifBlank { playingVideo.fileName },
+            headers = playingVideo.headers,
+            streamType = playingVideo.streamType,
+            isOnlinePreview = playingVideo.localUri.isNullOrBlank(),
             onClose = { viewModel.closePlayer() }
         )
     }

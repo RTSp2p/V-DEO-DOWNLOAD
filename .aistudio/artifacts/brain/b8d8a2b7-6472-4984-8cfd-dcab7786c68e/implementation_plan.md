@@ -1,170 +1,163 @@
-# 1DM Video Hunter - Expansão de Telas, Navegação e Correções Críticas
+# 1DM Video Hunter — Arquitetura Avançada de Streams Adaptativas (HLS/DASH), Motor Híbrido e Multiplexação
 
-Plano detalhado para a reestruturação da navegação principal em 3 destinos ("Home", "Navegador" e "Biblioteca"), adição da tela Home com abas de status de downloads ("TODOS", "BAIXANDO", "COMPLETOS", "ERROS"), persistência de histórico de navegação e sessão da WebView, menu do navegador com chave de captura e histórico em diálogo modal, novas ações no BottomSheet de vídeos detectados e correções críticas no disparo de notificações e no fechamento da janela de mídia.
+Evolução completa da arquitetura de captura, download e reprodução do **1DM Video Hunter** para suportar streams adaptativas modernas (HLS `.m3u8` e DASH `.mpd`), contornar bloqueios de sessão (headers anti-403), detectar proteção DRM preventivamente, selecionar resoluções ou extrair apenas áudio, baixar segmentos criptografados (AES-128) ou com pausa/retomada (Range Requests) em segundo plano via Foreground Service, multiplexar trilhas em `.mp4` e pré-visualizar streams online no player interno.
+
+---
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> Decisões confirmadas pelo usuário:
-> - **Visualização do Histórico:** Diálogo modal rápido e elegante renderizado diretamente sobre a tela do Navegador, com os últimos 30 sites visitados, ação de toque para abrir e limpeza rápida.
-> - **Listagem na Tela Home:** Cards detalhados com informações de status, taxa/progresso, tamanho, botões de cancelamento para ativos e botão de retry para downloads com erro.
-> - **Correção de Notificações:** Notificações estritamente vinculadas ao `downloadId` individual no instante da mudança de estado, eliminando qualquer reemissão de notificações para itens concluídos no passado.
-> - **Comportamento do Botão "X" no BottomSheet:** O botão apenas fecha/minimiza o BottomSheet (`sheetState.hide()`), mantendo intactos todos os vídeos detectados no banco de dados Room e no badge numérico do FAB.
+> As decisões abaixo refletem suas escolhas confirmadas e as diretrizes técnicas para máxima estabilidade e compatibilidade no Android:
+
+- **Decisão Confirmada 1 — Seleção de Qualidade em Lote vs. Individual**:
+  - **Download Individual**: Ao tocar no botão de download de uma stream adaptativa (`HLS` ou `DASH`), o app faz o parse do manifesto e abre o modal **Seletor de Qualidade & Extração de Áudio**, permitindo escolher a resolução desejada (ex.: `1080p`, `720p`, `480p`, `360p`) ou a opção **"Apenas Áudio (.m4a)"**.
+  - **Download em Lote ("Baixar Selecionados")**: Para não interromper o fluxo com múltiplos diálogos, o motor seleciona automaticamente a variante de **maior resolução disponível** para cada stream adaptativa do lote.
+- **Decisão Confirmada 2 — Pré-visualização Online no Reprodutor Interno**:
+  - Os cards de **Vídeos Detectados** (no navegador) e os cards da **Biblioteca** contarão com um botão **Play (Pré-visualizar)** que abre o reprodutor nativo (`InternalVideoPlayer`) configurado com `HlsMediaSource`, `DashMediaSource` e `ProgressiveMediaSource`, injetando automaticamente os headers capturados (`Cookie`, `User-Agent`, `Referer`) para reproduzir a stream online mesmo antes de baixá-la.
+- **Escolha Técnica — Multiplexação e Remuxing Nativo com AndroidX Media3 (`media3-muxer` / `media3-transformer` / `MediaMuxer`)**:
+  - Como o artefato Maven `com.arthenica:ffmpeg-kit-full` foi descontinuado/removido do Maven Central oficial, utilizaremos a suíte oficial **AndroidX Media3 (`media3-exoplayer-hls`, `media3-exoplayer-dash`, `media3-transformer`, `media3-muxer`, `media3-datasource-okhttp`)** combinada com pipeline nativo de demuxing/muxing (`MediaExtractor` + `MediaMuxer` / `Mp4Muxer`) e `Coil` para renderização de thumbnails.
 
 ---
 
 ## 1. Overview & Core Concept
 
-- **O que muda:**
-  1. **Navegação em 3 Destinos:**
-     - **Home:** Painel central de controle de downloads com abas horizontais `PrimaryTabRow` filtrando por:
-       - **TODOS:** Todos os vídeos gerenciados.
-       - **BAIXANDO:** Downloads em andamento (`STATUS_DOWNLOADING`), com indicador de progresso e botão de cancelar.
-       - **COMPLETOS:** Mídias salvas com sucesso (`STATUS_COMPLETED`), com botão rápido para reproduzir.
-       - **ERROS:** Downloads com falha (`STATUS_FAILED`), com motivo e botão de tentar novamente (retry).
-     - **Navegador:** Ambiente de navegação integrado com preservação de sessão (`saveState`/`restoreState` e última URL persistida), barra superior compacta (Voltar, Avançar, Recarregar e URL/Busca em linha), menu de 3 pontos com toggle de captura ("Começar Captura"), atalho "Voltar para Home" e "Histórico".
-     - **Biblioteca:** Antiga tela de concluídos, mantendo pesquisa instantânea, 6 opções de ordenação e reprodução com player Media3 ExoPlayer.
-  2. **Persistência de Histórico de Navegação (`BrowsingHistoryEntity`):**
-     - Tabela Room dedicada gravando `url`, `title`, `visitedAt` e favicon/ícone, limitada aos últimos 30 registros mais recentes.
-  3. **Ações no BottomSheet de Vídeos Detectados:**
-     - Botão / menu no canto inferior esquerdo com:
-       - **Limpar Todos:** Diálogo de confirmação para remover vídeos detectados pendentes do Room.
-       - **Cancelar Download:** Interrompe tarefas ativas chamando `downloadManager.remove(id)` e marcando o status como cancelado/falho.
-  4. **Correção do Botão "X" do BottomSheet:**
-     - Apenas fecha o modal, sem apagar nenhum registro do banco nem zerar o badge.
-  5. **Correção de Notificações Duplicadas:**
-     - Eliminação de alertas para itens antigos; o `BroadcastReceiver` notifica exclusivamente o `downloadId` que disparou o evento.
+- **O que o sistema faz**: Captura tanto mídias progressivas diretas (`.mp4`, `.webm`, `.mkv`) quanto manifestos de streaming adaptativo (`HLS .m3u8` e `DASH .mpd`) diretamente da navegação WebView, preservando credenciais de sessão (`Cookies`, `User-Agent`, `Referer`), metadados visuais (`título` e `thumbnail/poster`) e verificando criptografia DRM antes do download.
+- **Público e Caso de Uso**: Usuários que desejam capturar vídeos de plataformas modernas que utilizam streaming segmentado, autenticação por sessão temporária, trilhas de áudio/vídeo separadas e criptografia de segmentos AES-128.
+- **Valor Principal**: Elimina falhas `HTTP 403 Forbidden`, evita poluição da lista com centenas de fragmentos `.ts`/`.m4s` isolados, informa claramente quando um vídeo possui DRM incompatível (Widevine/PlayReady/SAMPLE-AES-CTR) e entrega um arquivo `.mp4` (ou `.m4a` para áudio) unificado e indexado diretamente na Galeria do Android (`MediaStore`).
 
 ---
 
 ## 2. User Experience & Visual Design
 
-### Fluxo da Tela Home
-- No topo da tela Home, um `PrimaryTabRow` estilizado com as 4 abas:
-  - **TODOS** (badge com total geral)
-  - **BAIXANDO** (badge ciano com contagem de downloads ativos)
-  - **COMPLETOS** (badge roxo com vídeos concluídos)
-  - **ERROS** (badge vermelho com falhas)
-- Cada card de download na Home apresenta:
-  - Ícone de mídia com cor temática dependendo do status.
-  - Nome do arquivo e tamanho em bytes formatado.
-  - Barra de progresso para downloads ativos.
-  - Ações contextuais: Botão "Cancelar" para itens ativos, "Assistir" para completos e "Tentar Novamente" (Retry) para itens com falha.
+- **Fluxo Passo a Passo do Usuário**:
+  1. **Detecção Inteligente no Navegador**: Enquanto o usuário navega, o sniffer intercepta vídeos diretos e manifestos mestres HLS/DASH (ignorando fragmentos `.ts`, `.m4s`, `.mp4-init`). Se um manifesto contiver DRM restritivo, um alerta imediato é exibido via Snackbar/Banner e o item recebe a tag visual `DRM PROTEGIDO`.
+  2. **Lista de Vídeos Detectados Enriquecida**: Cada card no BottomSheet de Vídeos Detectados exibe a **miniatura (poster/thumbnail)**, o **título real da página ou vídeo**, badges indicando o tipo de fluxo (`DIRETO`, `HLS`, `DASH`, `DRM`), botão **Play (Pré-visualizar Online)** e botão **Baixar**.
+  3. **Seletor de Qualidade e Extração de Áudio**: Ao clicar em baixar uma stream `HLS` ou `DASH` individualmente, abre-se um BottomSheet listando todas as variantes parseadas do manifesto (resolução, bitrate estimado, codec) mais a opção dedicada **"Apenas Áudio (.m4a)"**.
+  4. **Acompanhamento em Segundo Plano e na Home**: O download inicia em um **Foreground Service** com notificação persistente exibindo progresso, velocidade em tempo real (`MB/s` ou `KB/s`), porcentagem e ação **Cancelar**. Na tela **Home**, os cards permitem **Pausar**, **Retomar** (via HTTP Range Requests ou retomada de segmento) e **Cancelar**.
+  5. **Conclusão, Multiplexação e Galeria**: Ao finalizar o download dos segmentos/trilhas, o status exibe a etapa de multiplexação (`Remuxing MP4`), salva o arquivo final no `MediaStore.Video.Media` (ou pasta SAF configurada) e limpa o cache temporário.
 
-### Fluxo da Tela Navegador
-- **Barra Superior Integrada em Linha única:**
-  - `[ < ]` (Voltar no histórico da WebView)
-  - `[ > ]` (Avançar no histórico)
-  - `[ ⟳ ]` (Recarregar página)
-  - Campo de texto (Omnibox) estilizado com cantos arredondados, ocupando o espaço flexível.
-  - `[ ⋮ ]` (Menu de opções com DropdownMenu).
-- **Menu de 3 Pontos:**
-  - `[✓] Começar Captura`: Checkbox que liga/desliga o sniffer em tempo real. Quando desligado, nenhuma requisição nem tag dispara novas inserções.
-  - `🏠 Voltar para Home`: Alterna a aba ativa para Home sem recarregar nem destruir a WebView.
-  - `🕒 Histórico`: Abre o diálogo modal do histórico.
-- **Diálogo Modal de Histórico:**
-  - Lista com os 30 registros mais recentes com título da página, URL e data/hora.
-  - Toque no item carrega a URL diretamente na WebView e fecha o diálogo.
-  - Botão "Limpar Histórico" no rodapé do diálogo.
-
-### Ações na Janela de Vídeos Detectados (BottomSheet)
-- No canto inferior do BottomSheet, uma barra de ações complementares ou menu de controle contendo:
-  - **Botão "Limpar Todos"**: Dispara AlertDialog ("Deseja remover todos os vídeos detectados da lista?"). Se confirmado, limpa itens com status `DETECTED` do Room.
-  - **Botão "Cancelar Download"**: Cancela todas as tarefas com status `DOWNLOADING` chamando `downloadManager.remove()` e atualizando o banco.
-- **Botão "X" de fechar**: Executa unicamente o recolhimento visual do BottomSheet, sem remover nenhum registro.
+- **Identidade Visual e Tema**:
+  - **Estética**: Mantém a identidade **Cyber-Utilitarian Neon / Material Design 3** com suporte adaptativo completo aos modos Claro, Escuro (AMOLED) e Sistema.
+  - **Badges Semânticos**:
+    - `HLS` / `DASH`: Destaque em ciano/roxo neon (`primary` / `secondary`).
+    - `DRM`: Destaque de alerta em vermelho/laranja (`errorContainer` / `onErrorContainer`) com ícone de cadeado e bloqueio preventivo do botão de download.
+  - **Feedback Interativo**: Indicadores de velocidade de rede em tempo real, barra de progresso linear determinada para fragmentos HLS/DASH e indeterminada durante a fase rápida de multiplexação final.
 
 ---
 
 ## 3. Key Product Decisions & Trade-Offs
 
-- **Status `FAILED` / Cancelado no Room:**
-  - *Decisão:* Adicionar suporte explícito ao status `STATUS_FAILED = "FAILED"` na entidade `CapturedVideoEntity`.
-  - *Motivo:* Permite à tela Home listar falhas na aba "ERROS", possibilitando que o usuário veja o motivo da interrupção e tente reiniciar o download com um clique.
-- **Histórico Persistido no Room (`BrowsingHistoryEntity`):**
-  - *Decisão:* Criar entidade com limite de 30 registros gerenciado via DAO (`DELETE FROM browsing_history WHERE id NOT IN (SELECT id FROM browsing_history ORDER BY visitedAt DESC LIMIT 30)`).
-  - *Motivo:* Extremamente rápido, reativo via `Flow`, seguro e não depende de storage volátil.
-- **Persistência de Sessão da WebView:**
-  - *Decisão:* Armazenar a última URL válida via `DataStore` ou preferência local, e manter o `Bundle` de navegação com `saveState`/`restoreState` na instância ativa do navegador.
-  - *Motivo:* Permite que o usuário feche e reabra o aplicativo continuando exatamente da página onde parou, preservando o histórico de navegação.
-- **Notificações Pontuais:**
-  - *Decisão:* Filtrar emissões de notificação e eventos na UI usando estritamente o `downloadId` recebido no Intent de `ACTION_DOWNLOAD_COMPLETE`.
-  - *Motivo:* Evita reprocessar listas ou exibir múltiplos alertas sonoros e notificações de itens passados ao iniciar um novo download.
+- **Decisão 1: Filtragem de Manifestos vs. Fragmentos no Sniffer**
+  - *Abordagem Escolhida*: Interceptar `.m3u8`, `.mpd` e MIME types `application/x-mpegURL`, `application/vnd.apple.mpegurl` e `application/dash+xml`, bloqueando explicitamente o registro individual de `.ts`, `.m4s` e `init.mp4`.
+  - *Por quê*: Players modernos disparam dezenas de requisições de segmentos por minuto. Filtrar fragmentos na origem garante que apenas a playlist principal apareça para o usuário escolher a qualidade.
+
+- **Decisão 2: Motor Híbrido em Foreground Service Próprio com OkHttp + Coroutines**
+  - *Abordagem Escolhida*: Substituir o uso exclusivo do `DownloadManager` do sistema por um motor híbrido gerenciado por `DownloadService` (Foreground Service do tipo `dataSync`), usando `OkHttpClient` com repasse de headers (`Cookie`, `User-Agent`, `Referer`).
+  - *Por quê*: O `DownloadManager` nativo do Android não baixa nem concatena playlists `.m3u8`/`.mpd`, não descriptografa chaves `AES-128` e não faz multiplexação de vídeo+áudio separados. Com `OkHttp` + `Coroutines`, suportamos tanto **Range Requests** (`Range: bytes=N-`) com Pausa/Retomada para links diretos quanto download concorrente/sequencial de segmentos HLS/DASH.
+
+- **Decisão 3: Detecção Preventiva de DRM e Descriptografia AES-128 Padrão**
+  - *Abordagem Escolhida*: Durante a inspeção do manifesto, diferenciar criptografia de transporte suportada (`#EXT-X-KEY:METHOD=AES-128` com URI de chave acessível) de esquemas de DRM de hardware/licença (`SAMPLE-AES`, `SAMPLE-AES-CTR`, `Widevine`, `PlayReady`, `cenc`).
+  - *Por quê*: Streams com `AES-128` padrão podem ser legitimamente descriptografadas via `javax.crypto.Cipher` (`AES/CBC/PKCS5Padding`) usando a chave de 16 bytes e o IV do manifesto, enquanto conteúdos com DRM Widevine/PlayReady devem ser sinalizados imediatamente ao usuário com aviso claro.
 
 ---
 
-## 4. Technical Architecture & Data Strategy
+## 4. Technical Architecture & Data Strategy *(Technical Reference)*
 
+### Architecture & Component Diagram
+
+```text
+┌────────────────────────────────────────────────────────────────────────────┐
+│                        CAMADA DE APRESENTAÇÃO (UI)                         │
+│                                                                            │
+│  ┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────┐  │
+│  │    BrowserScreen     │  │      HomeScreen      │  │ DownloadsScreen  │  │
+│  │  • WebView + Sniffer │  │  • Abas de Status    │  │   (Biblioteca)   │  │
+│  │  • Vídeos Detectados │  │  • Progresso & Taxa  │  │  • Busca/Filtro  │  │
+│  │  • Seletor Qualidade │  │  • Pausar / Retomar  │  │  • Player Nativo │  │
+│  └──────────┬───────────┘  └──────────┬───────────┘  └────────┬─────────┘  │
+│             │                         │                       │            │
+│             └─────────────────────────┼───────────────────────┘            │
+│                                       ▼                                    │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │              InternalVideoPlayer (Media3 ExoPlayer)                  │  │
+│  │   • OkHttpDataSource.Factory (Cookies + User-Agent + Referer)        │  │
+│  │   • HlsMediaSource / DashMediaSource / ProgressiveMediaSource        │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+└───────────────────────────────────────┬────────────────────────────────────┘
+                                        │ StateFlow / Eventos MVVM
+                                        ▼
+┌────────────────────────────────────────────────────────────────────────────┐
+│                     CAMADA DE DOMÍNIO & DADOS (MVVM)                       │
+│                                                                            │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │                         VideoRepository                              │  │
+│  │   • Coordena Sniffer, Manifesto Parser, Room DB e DownloadService    │  │
+│  └──────────────┬───────────────────────────────────────┬───────────────┘  │
+│                 │                                       │                  │
+│                 ▼                                       ▼                  │
+│  ┌──────────────────────────────┐       ┌───────────────────────────────┐  │
+│  │   StreamManifestParser       │       │     Room Database (v3)        │  │
+│  │ • Parse HLS (.m3u8) Variants │       │ • CapturedVideoEntity         │  │
+│  │ • Parse DASH (.mpd) Adapts   │       │   (isStream, streamType,      │  │
+│  │ • Detecta DRM (Widevine/AES) │       │    headers, thumbnailUrl,     │  │
+│  │ • Extrai Trilhas Áudio/Vídeo │       │    title, isDrmProtected,     │  │
+│  └──────────────────────────────┘       │    downloadSpeed, progress)   │  │
+│                                         └───────────────────────────────┘  │
+└───────────────────────────────────────┬────────────────────────────────────┘
+                                        │ Intent / Binders / Coroutines
+                                        ▼
+┌────────────────────────────────────────────────────────────────────────────┐
+│               MOTOR DE DOWNLOAD HÍBRIDO (SEGUNDO PLANO)                    │
+│                                                                            │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │                  DownloadService (Foreground Service)                │  │
+│  │   • Notificação Persistente (Progresso, Velocidade B/s, Cancelar)    │  │
+│  ├──────────────────────────────────┬───────────────────────────────────┤  │
+│  │   Fluxo Direto (MP4/WebM/MKV)    │   Fluxo Adaptativo (HLS / DASH)   │  │
+│  │ • OkHttp Range Requests          │ • Download Sequencial/Paralelo    │  │
+│  │   (Header: Range: bytes=start-)  │ • Descriptografia AES-128 (CBC)   │  │
+│  │ • Suporte a Pause / Resume       │ • Download Vídeo + Áudio Separado │  │
+│  └──────────────────┬───────────────┴───────────────────┬───────────────┘  │
+│                     └─────────────────┬─────────────────┘                  │
+│                                       ▼                                    │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │                MediaMuxerEngine & MediaStoreExporter                 │  │
+│  │   • Concatenação e Remuxing de Chunks / Muxing Vídeo + Áudio (.mp4)  │  │
+│  │   • Exportação Pública via MediaStore.Video.Media (Movies/Download)  │  │
+│  │   • Limpeza Segura de Chunks Temporários no Cache                    │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+└────────────────────────────────────────────────────────────────────────────┘
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│                          PRESENTATION LAYER                            │
-│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────────┐  │
-│  │    HomeScreen    │  │  BrowserScreen   │  │   DownloadsScreen    │  │
-│  │ (Tabs: TODOS,    │  │ (WebView, Omnibox│  │ ("Biblioteca": busca,│  │
-│  │  BAIXANDO,       │  │  Session, Menu,  │  │  ordenação, player)  │  │
-│  │  COMPLETOS,      │  │  History Dialog, │  │                      │  │
-│  │  ERROS)          │  │  Sniffer Toggle) │  │                      │  │
-│  └────────┬─────────┘  └────────┬─────────┘  └──────────┬───────────┘  │
-│           │                     │                       │              │
-│           ▼                     ▼                       ▼              │
-│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────────┐  │
-│  │  HomeViewModel   │  │ BrowserViewModel │  │  DownloadsViewModel  │  │
-│  │ (Tab state,      │  │ (Sniffer toggle, │  │                      │  │
-│  │  cancel/retry)   │  │  History Flow)   │  │                      │  │
-│  └────────┬─────────┘  └────────┬─────────┘  └──────────┬───────────┘  │
-└───────────┼─────────────────────┼───────────────────────┼──────────────┘
-            ▼                     ▼                       ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│                             DATA LAYER                                 │
-│  ┌──────────────────────────────────────────────────────────────────┐  │
-│  │                     VideoRepository                              │  │
-│  │  - observeAllVideos(): Flow<List<CapturedVideoEntity>>           │  │
-│  │  - observeDownloadingVideos(): Flow<List<CapturedVideoEntity>>   │  │
-│  │  - observeCompletedVideos(): Flow<List<CapturedVideoEntity>>     │  │
-│  │  - observeFailedVideos(): Flow<List<CapturedVideoEntity>>        │  │
-│  │  - observeHistory(): Flow<List<BrowsingHistoryEntity>>           │  │
-│  │  - insertHistory(url, title)                                     │  │
-│  │  - cancelActiveDownloads()                                       │  │
-│  │  - retryDownload(id)                                             │  │
-│  └───────────────────┬───────────────────────────────┬──────────────┘  │
-│                      │                               │                 │
-│                      ▼                               ▼                 │
-│         ┌─────────────────────────┐      ┌──────────────────────────┐  │
-│         │   Room Database & DAOs  │      │  Android DownloadManager │  │
-│         │ - CapturedVideoEntity   │      │  + DownloadCompletedRcv  │  │
-│         │ - BrowsingHistoryEntity │      │  (strictly by downloadId)│  │
-│         └─────────────────────────┘      └──────────────────────────┘  │
-└────────────────────────────────────────────────────────────────────────┘
-```
 
----
+### Data Model & State (`CapturedVideoEntity` & `StreamType`)
 
-## 5. Implementation Roadmap (Phases)
+- **`StreamType` (Enum)**: `DIRECT`, `HLS`, `DASH`.
+- **Campos adicionados em `CapturedVideoEntity` (Room Database v3 com `TypeConverters`)**:
+  - `title: String`: Título extraído do elemento `<video>` (`title`/`aria-label`) ou `document.title`.
+  - `thumbnailUrl: String?`: URL do atributo `poster` da tag `<video>` ou meta `og:image`.
+  - `isStream: Boolean`: `true` para streams `HLS`/`DASH`, `false` para arquivos diretos.
+  - `streamType: StreamType`: Tipo da mídia (`DIRECT`, `HLS`, `DASH`).
+  - `headers: Map<String, String>`: Mapa persistido via JSON contendo `Cookie`, `User-Agent`, `Referer` e `Origin`.
+  - `isDrmProtected: Boolean`: Indica se o manifesto contém DRM incompatível (Widevine, PlayReady, SAMPLE-AES-CTR).
+  - `selectedQualityLabel: String?`: Resolução ou modo selecionado (ex.: `"1080p"`, `"720p"`, `"Apenas Áudio"`).
+  - `downloadProgress: Int`: Porcentagem de `0` a `100` persistida reativamente.
+  - `downloadedBytes: Long` e `downloadSpeedBytesPerSec: Long`: Métricas em tempo real para exibição nos cards da Home e na notificação.
+  - Novos status suportados: `DETECTED`, `DOWNLOADING`, `PAUSED`, `MUXING`, `COMPLETED`, `FAILED`, `DRM_BLOCKED`.
 
-1. **Camada de Dados & Persistência (Room):**
-   - Atualizar `CapturedVideoEntity` com constante `STATUS_FAILED = "FAILED"`.
-   - Criar `BrowsingHistoryEntity` (`id`, `url`, `title`, `visitedAt`).
-   - Criar `BrowsingHistoryDao` com inserção, expurgo para manter 30 itens e `observeHistory()`.
-   - Adicionar consultas no `VideoDao`: `observeAllVideos()`, `observeDownloadingVideos()`, `observeFailedVideos()`, `updateStatus(id, status)` e `cancelDownloads()`.
-   - Atualizar `AppDatabase` com versão 2 e fallback to destructive migration.
-2. **Repositório & DownloadHelper:**
-   - Adicionar cancelamento de downloads ativos (`downloadHelper.cancelDownload(downloadId)` via `downloadManager.remove`).
-   - Adicionar método `retryDownload(id)`.
-   - Adicionar gravação e limpeza de histórico.
-   - Corrigir `DownloadCompletedReceiver` para disparar notificação pontual apenas para o item do `downloadId` correspondente.
-3. **Nova Tela Home (`HomeScreen.kt`) & `HomeViewModel`:**
-   - Criar `HomeViewModel` observando os fluxos por status.
-   - Criar `HomeScreen` com `PrimaryTabRow` (TODOS, BAIXANDO, COMPLETOS, ERROS).
-   - Desenvolver cards ricos com barra de progresso, botão de cancelar em downloads ativos e botão de retry para falhas.
-4. **Melhorias no Navegador (`BrowserScreen.kt` & `BrowserViewModel`):**
-   - Adicionar persistência da última URL com recarregamento automático no arranque.
-   - Reorganizar a barra superior em linha única: Voltar, Avançar, Recarregar, Omnibox e menu de opções.
-   - Menu de 3 pontos: toggle "Começar Captura", "Voltar para Home" e "Histórico".
-   - Criar diálogo modal `BrowsingHistoryDialog` listando os 30 sites recentes com clique para carregar URL e botão de limpar.
-5. **Ações no BottomSheet e Correção do Botão "X":**
-   - Corrigir o botão "X" do `BatchDownloadSheet`: fecha o modal sem excluir itens do Room.
-   - Adicionar barra/menu de ações no canto inferior: "Limpar Todos" (com confirmação) e "Cancelar Download".
-6. **Reestruturação da Barra Inferior (`MainScreen.kt`):**
-   - 3 abas na `NavigationBar`: "Home", "Navegador" e "Biblioteca".
-   - Atualizar strings e rótulos ("Biblioteca" para a tela de baixados).
-7. **Verificação & Compilação:**
-   - Executar `compile_applet` e testes unitários/Robolectric para garantir estabilidade e ausência de regressões.
+### Interactive Component & State Mapping
+
+1. **Sniffer & JS Bridge (`VideoSnifferWebViewClient` + `VideoSnifferJsBridge`)**:
+   - Captura links `.m3u8` e `.mpd` via DOM, `fetch`/`XHR` hooks e `shouldInterceptRequest`, além de inspecionar o `Content-Type` (`application/x-mpegurl`, `application/vnd.apple.mpegurl`, `application/dash+xml`).
+   - Filtra e ignora segmentos individuais (`.ts`, `.m4s`, `.mp4-init`, `frag_`).
+   - Extrai `title`, `poster` (thumbnail) e cabeçalhos (`Cookie`, `User-Agent`, `Referer`).
+   - Faz verificação rápida do manifesto para detectar tags DRM (`SAMPLE-AES`, `Widevine`, `PlayReady`, `urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed`) e emite alerta imediato na UI caso detectado.
+2. **Parser de Manifesto e Seletor de Qualidade (`StreamManifestParser` + `StreamQualitySheet`)**:
+   - Analisa Master Playlists HLS (`#EXT-X-STREAM-INF`, `#EXT-X-MEDIA:TYPE=AUDIO`) e manifestos MPD DASH (`<AdaptationSet>`, `<Representation>`).
+   - Exibe ao usuário a lista de resoluções disponíveis e a opção **"Apenas Áudio (.m4a)"**.
+3. **Foreground Service Híbrido (`DownloadService`)**:
+   - Mantém notificação ativa com progresso, velocidade em tempo real e botão **Cancelar** via `PendingIntent`.
+   - Para links `DIRECT`: Suporta **Pausar e Retomar** usando cabeçalho `Range: bytes=<downloaded>-` e gravação incremental (`RandomAccessFile` / `FileOutputStream(append = true)`).
+   - Para `HLS` / `DASH`: Resolve a Media Playlist da variante escolhida, baixa chave AES-128 se `#EXT-X-KEY:METHOD=AES-128` estiver presente, descriptografa cada segmento em cache, baixa a trilha de áudio em paralelo se separada, realiza o remuxing/concatenação para `.mp4` (ou `.m4a`), publica no `MediaStore.Video.Media` (e pasta SAF se configurada) e remove todos os arquivos temporários.
+4. **Reprodutor Interno Online e Offline (`InternalVideoPlayer`)**:
+   - Usa `ExoPlayer` com `DefaultHttpDataSource.Factory` configurado com os `headers` capturados (`Cookie`, `User-Agent`, `Referer`).
+   - Seleciona dinamicamente `HlsMediaSource`, `DashMediaSource` ou `ProgressiveMediaSource` para permitir tanto assistir streams online antes do download quanto reproduzir vídeos já salvos na Biblioteca.

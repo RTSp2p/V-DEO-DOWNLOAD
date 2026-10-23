@@ -32,7 +32,9 @@ import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.HourglassEmpty
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SelectAll
@@ -66,6 +68,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -73,7 +76,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
 import com.example.data.local.entity.CapturedVideoEntity
+import com.example.data.local.entity.StreamType
+import com.example.service.DownloadService
 import com.example.ui.player.InternalVideoPlayer
 import com.example.ui.theme.AccentGreen
 import com.example.ui.theme.AccentRed
@@ -102,7 +108,6 @@ fun HomeScreen(
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // SAF OpenDocumentTree Launcher para seleção de pasta de download personalizada
     val openDocumentTreeLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri: Uri? ->
@@ -182,7 +187,6 @@ fun HomeScreen(
                         }
                     }
 
-                    // Ícone de engrenagem (Settings) na barra superior da Home
                     IconButton(
                         onClick = { viewModel.openSettingsDialog() },
                         modifier = Modifier
@@ -261,7 +265,7 @@ fun HomeScreen(
                     }
                 }
 
-                // Barra de Seleção em Lote e Limpeza de Histórico (visível quando há itens na aba atual)
+                // Barra de Seleção em Lote e Limpeza de Histórico
                 AnimatedVisibility(visible = currentList.isNotEmpty()) {
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.75f),
@@ -274,7 +278,6 @@ fun HomeScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            // Botão / Checkbox "Selecionar Todos"
                             TextButton(
                                 onClick = { viewModel.toggleSelectAllCurrentTab() },
                                 modifier = Modifier.testTag("home_select_all_btn")
@@ -294,7 +297,6 @@ fun HomeScreen(
                                 )
                             }
 
-                            // Botão "Limpar do Histórico" para os cards selecionados
                             Button(
                                 onClick = { viewModel.clearSelectedFromHistory() },
                                 enabled = selectedVideoIds.isNotEmpty(),
@@ -379,7 +381,7 @@ fun HomeScreen(
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Abra o Navegador para capturar e baixar novos vídeos.",
+                            text = "Abra o Navegador para capturar e baixar vídeos diretos ou streams HLS/DASH.",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 13.sp
                         )
@@ -399,6 +401,8 @@ fun HomeScreen(
                             isSelected = isSelected,
                             onToggleSelect = { viewModel.toggleVideoSelection(video.id) },
                             onWatch = { viewModel.playVideo(video) },
+                            onPause = { viewModel.pauseDownload(video) },
+                            onResume = { viewModel.resumeDownload(video) },
                             onCancel = { viewModel.cancelDownload(video) },
                             onRetry = { viewModel.retryDownload(video) },
                             onDelete = { viewModel.deleteVideo(video) }
@@ -409,7 +413,6 @@ fun HomeScreen(
         }
     }
 
-    // Diálogo de Configurações (Tema e Pasta de Download SAF)
     if (isSettingsDialogVisible) {
         SettingsDialog(
             currentThemeMode = themeMode,
@@ -430,12 +433,16 @@ fun HomeScreen(
         )
     }
 
-    // Video Player se o usuário clicar em "Assistir" a partir da Home
+    // Video Player se o usuário clicar em "Assistir" ou "Prévia" a partir da Home
     activePlayingVideo?.let { playingVideo ->
         val uriToPlay = playingVideo.localUri ?: playingVideo.videoUrl
+        val isOnline = playingVideo.localUri.isNullOrBlank()
         InternalVideoPlayer(
             videoUriString = uriToPlay,
-            videoTitle = playingVideo.fileName,
+            videoTitle = playingVideo.title.ifBlank { playingVideo.fileName },
+            headers = playingVideo.headers,
+            streamType = playingVideo.streamType,
+            isOnlinePreview = isOnline,
             onClose = { viewModel.closePlayer() }
         )
     }
@@ -448,14 +455,20 @@ private fun HomeDownloadCard(
     isSelected: Boolean,
     onToggleSelect: () -> Unit,
     onWatch: () -> Unit,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
     onCancel: () -> Unit,
     onRetry: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val isDownloading = video.downloadStatus == CapturedVideoEntity.STATUS_DOWNLOADING
+    val isPaused = video.downloadStatus == CapturedVideoEntity.STATUS_PAUSED
+    val isMuxing = video.downloadStatus == CapturedVideoEntity.STATUS_MUXING
     val isCompleted = video.downloadStatus == CapturedVideoEntity.STATUS_COMPLETED
     val isFailed = video.downloadStatus == CapturedVideoEntity.STATUS_FAILED
+    val isDrmBlocked = video.downloadStatus == CapturedVideoEntity.STATUS_DRM_BLOCKED || video.isDrmProtected
+    val isDetected = video.downloadStatus == CapturedVideoEntity.STATUS_DETECTED
 
     Card(
         colors = CardDefaults.cardColors(
@@ -484,7 +497,6 @@ private fun HomeDownloadCard(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Checkbox para seleção individual ou em lote
                 Checkbox(
                     checked = isSelected,
                     onCheckedChange = { onToggleSelect() },
@@ -498,44 +510,58 @@ private fun HomeDownloadCard(
 
                 Spacer(modifier = Modifier.width(6.dp))
 
-                // Media Icon
-                Box(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(
-                            when {
-                                isDownloading -> MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-                                isCompleted -> MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f)
-                                isFailed -> AccentRed.copy(alpha = 0.15f)
-                                else -> MaterialTheme.colorScheme.outline
-                            }
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = when {
-                            isDownloading -> Icons.Default.Download
-                            isCompleted -> Icons.Default.Movie
-                            isFailed -> Icons.Default.Error
-                            else -> Icons.Default.HourglassEmpty
-                        },
-                        contentDescription = null,
-                        tint = when {
-                            isDownloading -> MaterialTheme.colorScheme.primary
-                            isCompleted -> MaterialTheme.colorScheme.secondary
-                            isFailed -> AccentRed
-                            else -> MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                        modifier = Modifier.size(24.dp)
+                // Media Thumbnail or Icon
+                if (!video.thumbnailUrl.isNullOrBlank()) {
+                    AsyncImage(
+                        model = video.thumbnailUrl,
+                        contentDescription = video.title.ifBlank { video.fileName },
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .size(46.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.outline)
                     )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .size(46.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(
+                                when {
+                                    isDownloading || isMuxing -> MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                                    isCompleted -> MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f)
+                                    isFailed || isDrmBlocked -> AccentRed.copy(alpha = 0.15f)
+                                    else -> MaterialTheme.colorScheme.outline
+                                }
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = when {
+                                isDrmBlocked -> Icons.Default.Lock
+                                isDownloading || isMuxing -> Icons.Default.Download
+                                isPaused -> Icons.Default.Pause
+                                isCompleted -> Icons.Default.Movie
+                                isFailed -> Icons.Default.Error
+                                else -> Icons.Default.HourglassEmpty
+                            },
+                            contentDescription = null,
+                            tint = when {
+                                isDownloading || isMuxing -> MaterialTheme.colorScheme.primary
+                                isCompleted -> MaterialTheme.colorScheme.secondary
+                                isFailed || isDrmBlocked -> AccentRed
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.width(12.dp))
 
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = video.fileName,
+                        text = video.title.ifBlank { video.fileName },
                         color = MaterialTheme.colorScheme.onSurface,
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 14.sp,
@@ -544,7 +570,12 @@ private fun HomeDownloadCard(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        // Badge Formato
+                        // Badge Formato / Stream
+                        val formatBadge = if (video.isStream && video.downloadStatus != CapturedVideoEntity.STATUS_COMPLETED) {
+                            video.streamType.name
+                        } else {
+                            video.fileType.uppercase()
+                        }
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(4.dp))
@@ -552,7 +583,7 @@ private fun HomeDownloadCard(
                                 .padding(horizontal = 6.dp, vertical = 2.dp)
                         ) {
                             Text(
-                                text = video.fileType.uppercase(),
+                                text = formatBadge,
                                 color = MaterialTheme.colorScheme.secondary,
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold
@@ -567,9 +598,10 @@ private fun HomeDownloadCard(
                                 .clip(RoundedCornerShape(4.dp))
                                 .background(
                                     when {
-                                        isDownloading -> MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
+                                        isDownloading || isMuxing -> MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
+                                        isPaused -> Color(0xFFF59E0B).copy(alpha = 0.2f)
                                         isCompleted -> AccentGreen.copy(alpha = 0.2f)
-                                        isFailed -> AccentRed.copy(alpha = 0.2f)
+                                        isFailed || isDrmBlocked -> AccentRed.copy(alpha = 0.2f)
                                         else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
                                     }
                                 )
@@ -577,15 +609,19 @@ private fun HomeDownloadCard(
                         ) {
                             Text(
                                 text = when (video.downloadStatus) {
-                                    CapturedVideoEntity.STATUS_DOWNLOADING -> "BAIXANDO"
+                                    CapturedVideoEntity.STATUS_DOWNLOADING -> "BAIXANDO (${video.downloadProgress}%)"
+                                    CapturedVideoEntity.STATUS_PAUSED -> "PAUSADO (${video.downloadProgress}%)"
+                                    CapturedVideoEntity.STATUS_MUXING -> "MULTIPLEXANDO MP4"
                                     CapturedVideoEntity.STATUS_COMPLETED -> "COMPLETO"
+                                    CapturedVideoEntity.STATUS_DRM_BLOCKED -> "DRM BLOQUEADO"
                                     CapturedVideoEntity.STATUS_FAILED -> "FALHOU"
                                     else -> "DETECTADO"
                                 },
                                 color = when {
-                                    isDownloading -> MaterialTheme.colorScheme.primary
+                                    isDownloading || isMuxing -> MaterialTheme.colorScheme.primary
+                                    isPaused -> Color(0xFFF59E0B)
                                     isCompleted -> AccentGreen
-                                    isFailed -> AccentRed
+                                    isFailed || isDrmBlocked -> AccentRed
                                     else -> MaterialTheme.colorScheme.onSurfaceVariant
                                 },
                                 fontSize = 10.sp,
@@ -595,26 +631,47 @@ private fun HomeDownloadCard(
 
                         Spacer(modifier = Modifier.width(8.dp))
 
+                        val sizeText = when {
+                            isDownloading && video.downloadSpeedBytesPerSec > 0L ->
+                                DownloadService.formatSpeed(video.downloadSpeedBytesPerSec)
+                            video.fileSizeBytes > 0L -> formatFileSize(video.fileSizeBytes)
+                            video.downloadedBytes > 0L -> formatFileSize(video.downloadedBytes)
+                            else -> "Pronto"
+                        }
                         Text(
-                            text = formatFileSize(video.fileSizeBytes),
+                            text = sizeText,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 11.sp
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
             }
 
-            // Barra de Progresso quando estiver baixando
-            if (isDownloading) {
+            // Barra de Progresso quando estiver baixando, pausado ou multiplexando
+            if (isDownloading || isPaused || isMuxing) {
                 Spacer(modifier = Modifier.height(10.dp))
-                LinearProgressIndicator(
-                    color = MaterialTheme.colorScheme.primary,
-                    trackColor = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(4.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                )
+                if (isMuxing) {
+                    LinearProgressIndicator(
+                        color = MaterialTheme.colorScheme.secondary,
+                        trackColor = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(5.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                    )
+                } else {
+                    LinearProgressIndicator(
+                        progress = { (video.downloadProgress.coerceIn(0, 100)) / 100f },
+                        color = if (isPaused) Color(0xFFF59E0B) else MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(5.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(10.dp))
@@ -632,7 +689,92 @@ private fun HomeDownloadCard(
                 )
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Botão Play / Prévia Online mesmo antes de concluir
+                    if (!isDrmBlocked && (isDetected || isCompleted)) {
+                        Button(
+                            onClick = onWatch,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isCompleted) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.secondary.copy(alpha = 0.18f)
+                                },
+                                contentColor = if (isCompleted) {
+                                    MaterialTheme.colorScheme.onPrimary
+                                } else {
+                                    MaterialTheme.colorScheme.secondary
+                                }
+                            ),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier
+                                .height(36.dp)
+                                .testTag("watch_btn_${video.id}")
+                        ) {
+                            Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = if (isCompleted) "Assistir" else "Prévia",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    if (isDetected && !isDrmBlocked) {
+                        Button(
+                            onClick = onRetry,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
+                            ),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier
+                                .height(36.dp)
+                                .testTag("start_from_home_btn_${video.id}")
+                        ) {
+                            Icon(imageVector = Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Baixar", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
                     if (isDownloading) {
+                        Button(
+                            onClick = onPause,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.surface,
+                                contentColor = MaterialTheme.colorScheme.primary
+                            ),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier
+                                .height(36.dp)
+                                .testTag("pause_btn_${video.id}")
+                        ) {
+                            Icon(imageVector = Icons.Default.Pause, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Pausar", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    if (isPaused) {
+                        Button(
+                            onClick = onResume,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
+                            ),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier
+                                .height(36.dp)
+                                .testTag("resume_btn_${video.id}")
+                        ) {
+                            Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Retomar", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    if (isDownloading || isPaused || isMuxing) {
                         Button(
                             onClick = onCancel,
                             colors = ButtonDefaults.buttonColors(
@@ -650,21 +792,23 @@ private fun HomeDownloadCard(
                         }
                     }
 
-                    if (isFailed) {
-                        Button(
-                            onClick = onRetry,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary,
-                                contentColor = MaterialTheme.colorScheme.onPrimary
-                            ),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier
-                                .height(36.dp)
-                                .testTag("retry_btn_${video.id}")
-                        ) {
-                            Icon(imageVector = Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Tentar Novamente", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    if (isFailed || isDrmBlocked) {
+                        if (!isDrmBlocked) {
+                            Button(
+                                onClick = onRetry,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary
+                                ),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier
+                                    .height(36.dp)
+                                    .testTag("retry_btn_${video.id}")
+                            ) {
+                                Icon(imageVector = Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Tentar Novamente", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
                         }
 
                         IconButton(
@@ -681,24 +825,6 @@ private fun HomeDownloadCard(
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(18.dp)
                             )
-                        }
-                    }
-
-                    if (isCompleted) {
-                        Button(
-                            onClick = onWatch,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary,
-                                contentColor = MaterialTheme.colorScheme.onPrimary
-                            ),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier
-                                .height(36.dp)
-                                .testTag("watch_btn_${video.id}")
-                        ) {
-                            Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Assistir", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }

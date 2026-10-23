@@ -102,6 +102,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.browser.VideoSnifferJsBridge
 import com.example.browser.VideoSnifferWebViewClient
+import com.example.ui.player.InternalVideoPlayer
 import com.example.ui.theme.NeonCyan
 import com.example.ui.theme.NeonPurple
 import kotlinx.coroutines.flow.collectLatest
@@ -130,6 +131,8 @@ fun BrowserScreen(
     val isCaptureEnabled by viewModel.isCaptureEnabled.collectAsStateWithLifecycle()
     val browsingHistory by viewModel.browsingHistory.collectAsStateWithLifecycle()
     val isHistoryDialogVisible by viewModel.isHistoryDialogVisible.collectAsStateWithLifecycle()
+    val qualityDialogState by viewModel.qualityDialogState.collectAsStateWithLifecycle()
+    val previewPlayingVideo by viewModel.previewPlayingVideo.collectAsStateWithLifecycle()
 
     var webViewInstance by remember { mutableStateOf<WebView?>(null) }
     var urlInputText by remember { mutableStateOf(currentUrl) }
@@ -690,16 +693,27 @@ fun BrowserScreen(
                                     if (viewModel.isCaptureEnabled.value) {
                                         viewModel.onVideoDetected(url, fileName, ext)
                                     }
-                                }
+                                },
+                                onRichMediaDetected = { payload ->
+                                    if (viewModel.isCaptureEnabled.value) {
+                                        viewModel.onRichMediaDetected(payload)
+                                    }
+                                },
+                                pageUrlProvider = { viewModel.currentUrl.value },
+                                userAgentProvider = { settings.userAgentString }
                             )
                             addJavascriptInterface(jsBridge, VideoSnifferJsBridge.INTERFACE_NAME)
                             addJavascriptInterface(jsBridge, VideoSnifferJsBridge.BRIDGE_ALIAS_NAME)
 
                             webViewClient = VideoSnifferWebViewClient(
                                 onVideoDetected = { url, fileName, ext ->
-                                    // Mantém a lógica de detecção de vídeo existente
                                     if (viewModel.isCaptureEnabled.value) {
                                         viewModel.onVideoDetected(url, fileName, ext)
+                                    }
+                                },
+                                onRichMediaDetected = { payload ->
+                                    if (viewModel.isCaptureEnabled.value) {
+                                        viewModel.onRichMediaDetected(payload)
                                     }
                                 },
                                 onPageStartedCallback = { startedUrl ->
@@ -760,6 +774,7 @@ fun BrowserScreen(
             onToggleSelect = { id -> viewModel.toggleVideoSelection(id) },
             onToggleSelectAll = { viewModel.toggleSelectAll() },
             onDownloadSingle = { video -> viewModel.startSingleDownload(video) },
+            onPreviewVideo = { video -> viewModel.openPreviewPlayer(video) },
             onDownloadBatch = { viewModel.startBatchDownload() },
             onRemoveSingle = { video -> viewModel.removeDetectedVideo(video) },
             onRemoveSelected = { viewModel.removeSelectedDetectedVideos() },
@@ -779,6 +794,19 @@ fun BrowserScreen(
         )
     }
 
+    // Seletor de Qualidade e Extração de Áudio (.m4a) / Alerta de DRM para Streams Adaptativas
+    qualityDialogState?.let { dialogState ->
+        StreamQualityDialog(
+            video = dialogState.video,
+            isLoadingManifest = dialogState.isLoading,
+            isDrmProtected = dialogState.isDrmProtected,
+            drmMessage = dialogState.drmMessage,
+            options = dialogState.options,
+            onConfirmOption = { option -> viewModel.confirmStreamQualityDownload(option) },
+            onDismiss = { viewModel.dismissQualityDialog() }
+        )
+    }
+
     // Diálogo Modal de Histórico de Navegação (últimos 30 sites)
     if (isHistoryDialogVisible) {
         BrowsingHistoryDialog(
@@ -793,6 +821,18 @@ fun BrowserScreen(
             onDismiss = {
                 viewModel.closeHistoryDialog()
             }
+        )
+    }
+
+    // Reprodutor Interno para Pré-visualização de Streams Online antes do Download
+    previewPlayingVideo?.let { previewVideo ->
+        InternalVideoPlayer(
+            videoUriString = previewVideo.videoUrl,
+            videoTitle = previewVideo.title.ifBlank { previewVideo.fileName },
+            headers = previewVideo.headers,
+            streamType = previewVideo.streamType,
+            isOnlinePreview = true,
+            onClose = { viewModel.closePreviewPlayer() }
         )
     }
 }

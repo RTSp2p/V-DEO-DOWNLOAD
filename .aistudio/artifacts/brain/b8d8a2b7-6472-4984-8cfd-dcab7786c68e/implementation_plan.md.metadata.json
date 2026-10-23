@@ -1,6 +1,6 @@
 {
-  "summary": "Plano de implementação para refatoração da navegação em 3 destinos (Home com abas de status, Navegador com histórico e controle de captura, e Biblioteca), persistência de sessão e histórico no Room, ações no BottomSheet e correção de notificações pontuais.",
-  "updatedAt": "2026-10-17T23:00:52.292690925Z",
-  "requestFeedback": true,
-  "userFacing": true
+  "summary":  "Plano de arquitetura e implementação para suporte avançado a streams adaptativas (HLS/DASH), extração de metadados e headers anti-403, detecção preventiva de DRM, seletor de qualidade e áudio, motor de download híbrido em Foreground Service com AES-128 e Range Requests, multiplexação MP4 via Media3/Muxer e reprodutor interno com suporte a streaming online.",
+  "updatedAt":  "2026-10-22T16:16:49.419446156Z",
+  "requestFeedback":  true,
+  "userFacing":  true
 }

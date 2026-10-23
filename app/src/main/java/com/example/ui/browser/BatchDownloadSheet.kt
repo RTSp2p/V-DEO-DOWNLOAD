@@ -25,8 +25,10 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -58,14 +60,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.example.R
 import com.example.data.local.entity.CapturedVideoEntity
+import com.example.data.local.entity.StreamType
 import com.example.data.repository.SettingsRepository
 import com.example.ui.theme.AccentRed
 
@@ -78,6 +83,7 @@ fun BatchDownloadSheet(
     onToggleSelect: (Long) -> Unit,
     onToggleSelectAll: () -> Unit,
     onDownloadSingle: (CapturedVideoEntity) -> Unit,
+    onPreviewVideo: (CapturedVideoEntity) -> Unit = {},
     onDownloadBatch: () -> Unit,
     onRemoveSingle: (CapturedVideoEntity) -> Unit,
     onRemoveSelected: () -> Unit = {},
@@ -252,7 +258,7 @@ fun BatchDownloadSheet(
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 340.dp),
+                        .heightIn(max = 360.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(detectedVideos, key = { it.id }) { video ->
@@ -311,7 +317,7 @@ fun BatchDownloadSheet(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(12.dp),
+                                        .padding(10.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Checkbox(
@@ -325,54 +331,127 @@ fun BatchDownloadSheet(
                                         modifier = Modifier.testTag("checkbox_${video.id}")
                                     )
 
-                                    Spacer(modifier = Modifier.width(8.dp))
+                                    // Thumbnail / Poster se disponível
+                                    if (!video.thumbnailUrl.isNullOrBlank()) {
+                                        AsyncImage(
+                                            model = video.thumbnailUrl,
+                                            contentDescription = video.title.ifBlank { video.fileName },
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier
+                                                .size(44.dp)
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(MaterialTheme.colorScheme.outline)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                    } else {
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                    }
 
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
-                                            text = video.fileName,
+                                            text = video.title.ifBlank { video.fileName },
                                             color = MaterialTheme.colorScheme.onSurface,
-                                            fontWeight = FontWeight.Medium,
-                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            fontSize = 13.sp,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
                                         )
                                         Spacer(modifier = Modifier.height(4.dp))
                                         Row(verticalAlignment = Alignment.CenterVertically) {
+                                            // Badge Tipo de Stream ou Extensão
+                                            val badgeLabel = if (video.isStream || video.streamType != StreamType.DIRECT) {
+                                                "${video.streamType.name} STREAM"
+                                            } else {
+                                                video.fileType.uppercase()
+                                            }
                                             Box(
                                                 modifier = Modifier
                                                     .clip(RoundedCornerShape(4.dp))
-                                                    .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f))
+                                                    .background(
+                                                        if (video.isStream) {
+                                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+                                                        } else {
+                                                            MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f)
+                                                        }
+                                                    )
                                                     .padding(horizontal = 6.dp, vertical = 2.dp)
                                             ) {
                                                 Text(
-                                                    text = video.fileType.uppercase(),
-                                                    color = MaterialTheme.colorScheme.secondary,
+                                                    text = badgeLabel,
+                                                    color = if (video.isStream) {
+                                                        MaterialTheme.colorScheme.primary
+                                                    } else {
+                                                        MaterialTheme.colorScheme.secondary
+                                                    },
                                                     fontSize = 10.sp,
                                                     fontWeight = FontWeight.Bold
                                                 )
                                             }
 
-                                            Spacer(modifier = Modifier.width(8.dp))
+                                            if (video.isDrmProtected) {
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Box(
+                                                    modifier = Modifier
+                                                        .clip(RoundedCornerShape(4.dp))
+                                                        .background(AccentRed.copy(alpha = 0.22f))
+                                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                                ) {
+                                                    Text(
+                                                        text = "DRM",
+                                                        color = AccentRed,
+                                                        fontSize = 10.sp,
+                                                        fontWeight = FontWeight.Bold
+                                                    )
+                                                }
+                                            }
+
+                                            Spacer(modifier = Modifier.width(6.dp))
 
                                             Text(
-                                                text = if (isDownloading) "Baixando..." else "Arraste p/ esquerda p/ excluir",
-                                                color = if (isDownloading) {
-                                                    MaterialTheme.colorScheme.primary
-                                                } else {
-                                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                                text = when {
+                                                    video.isDrmProtected -> "Protegido por DRM"
+                                                    isDownloading -> "Baixando..."
+                                                    video.isStream -> "Seletor HD / Áudio"
+                                                    else -> "Arraste p/ excluir"
                                                 },
-                                                fontSize = 11.sp
+                                                color = when {
+                                                    video.isDrmProtected -> AccentRed
+                                                    isDownloading -> MaterialTheme.colorScheme.primary
+                                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                                },
+                                                fontSize = 11.sp,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
                                             )
                                         }
                                     }
 
-                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
 
-                                    // Individual Delete Button (além do gesto SwipeToDismissBox)
+                                    // Botão Play (Pré-visualizar Stream Online no InternalVideoPlayer)
+                                    IconButton(
+                                        onClick = { onPreviewVideo(video) },
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f))
+                                            .testTag("preview_detected_btn_${video.id}")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.PlayArrow,
+                                            contentDescription = "Pré-visualizar vídeo",
+                                            tint = MaterialTheme.colorScheme.secondary,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.width(4.dp))
+
+                                    // Individual Delete Button
                                     IconButton(
                                         onClick = { onRemoveSingle(video) },
                                         modifier = Modifier
-                                            .size(36.dp)
+                                            .size(34.dp)
                                             .testTag("remove_detected_btn_${video.id}")
                                     ) {
                                         Icon(
@@ -383,31 +462,31 @@ fun BatchDownloadSheet(
                                         )
                                     }
 
-                                    // Individual Download Button
+                                    // Individual Download Button (abre seletor se for HLS/DASH)
                                     IconButton(
                                         onClick = { onDownloadSingle(video) },
                                         enabled = !isDownloading,
                                         modifier = Modifier
-                                            .size(40.dp)
+                                            .size(38.dp)
                                             .clip(CircleShape)
                                             .background(
-                                                if (isDownloading) {
-                                                    MaterialTheme.colorScheme.outline
-                                                } else {
-                                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                                                when {
+                                                    video.isDrmProtected -> AccentRed.copy(alpha = 0.18f)
+                                                    isDownloading -> MaterialTheme.colorScheme.outline
+                                                    else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
                                                 }
                                             )
                                             .testTag("download_single_btn_${video.id}")
                                     ) {
                                         Icon(
-                                            imageVector = Icons.Default.Download,
+                                            imageVector = if (video.isDrmProtected) Icons.Default.Lock else Icons.Default.Download,
                                             contentDescription = "Baixar",
-                                            tint = if (isDownloading) {
-                                                MaterialTheme.colorScheme.onSurfaceVariant
-                                            } else {
-                                                MaterialTheme.colorScheme.primary
+                                            tint = when {
+                                                video.isDrmProtected -> AccentRed
+                                                isDownloading -> MaterialTheme.colorScheme.onSurfaceVariant
+                                                else -> MaterialTheme.colorScheme.primary
                                             },
-                                            modifier = Modifier.size(20.dp)
+                                            modifier = Modifier.size(19.dp)
                                         )
                                     }
                                 }
@@ -424,7 +503,6 @@ fun BatchDownloadSheet(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    // Botão de Ações no Canto Inferior Esquerdo
                     Box {
                         FilledTonalButton(
                             onClick = { showActionsMenu = true },
@@ -452,7 +530,6 @@ fun BatchDownloadSheet(
                             onDismissRequest = { showActionsMenu = false },
                             modifier = Modifier.background(MaterialTheme.colorScheme.surfaceVariant)
                         ) {
-                            // 1. Atalho solicitado: "Alterar Pasta de Download" via SAF
                             DropdownMenuItem(
                                 text = {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -477,7 +554,6 @@ fun BatchDownloadSheet(
                                 modifier = Modifier.testTag("change_download_folder_menu_item")
                             )
 
-                            // 2. Remover Selecionados (exclusão em lote do Room)
                             if (selectedIds.isNotEmpty()) {
                                 DropdownMenuItem(
                                     text = {
@@ -504,7 +580,6 @@ fun BatchDownloadSheet(
                                 )
                             }
 
-                            // 3. Limpar Todos os Detectados
                             DropdownMenuItem(
                                 text = {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -525,7 +600,6 @@ fun BatchDownloadSheet(
                                 modifier = Modifier.testTag("clear_all_detected_menu_item")
                             )
 
-                            // 4. Cancelar Downloads Ativos
                             DropdownMenuItem(
                                 text = {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -585,7 +659,6 @@ fun BatchDownloadSheet(
         }
     }
 
-    // Diálogo de Confirmação para "Limpar Todos"
     if (showClearConfirmationDialog) {
         AlertDialog(
             onDismissRequest = { showClearConfirmationDialog = false },

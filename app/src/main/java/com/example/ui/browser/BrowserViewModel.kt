@@ -4,9 +4,13 @@ import android.os.Bundle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.browser.DetectedMediaPayload
+import com.example.browser.VideoSnifferJsBridge
 import com.example.data.SessionManager
+import com.example.data.download.StreamQualityOption
 import com.example.data.local.entity.BrowsingHistoryEntity
 import com.example.data.local.entity.CapturedVideoEntity
+import com.example.data.local.entity.StreamType
 import com.example.data.repository.SettingsRepository
 import com.example.data.repository.VideoRepository
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -19,6 +23,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+
+data class StreamQualityDialogState(
+    val video: CapturedVideoEntity,
+    val isLoading: Boolean = true,
+    val isDrmProtected: Boolean = false,
+    val drmMessage: String? = null,
+    val options: List<StreamQualityOption> = emptyList()
+)
 
 class BrowserViewModel(
     private val repository: VideoRepository,
@@ -84,6 +96,14 @@ class BrowserViewModel(
     private val _isBatchSheetVisible = MutableStateFlow(false)
     val isBatchSheetVisible: StateFlow<Boolean> = _isBatchSheetVisible.asStateFlow()
 
+    // Estado do Seletor de Qualidade / Alerta de DRM para Streams Adaptativas (HLS / DASH)
+    private val _qualityDialogState = MutableStateFlow<StreamQualityDialogState?>(null)
+    val qualityDialogState: StateFlow<StreamQualityDialogState?> = _qualityDialogState.asStateFlow()
+
+    // Estado do Player Interno para pré-visualização online de vídeos/streams detectados
+    private val _previewPlayingVideo = MutableStateFlow<CapturedVideoEntity?>(null)
+    val previewPlayingVideo: StateFlow<CapturedVideoEntity?> = _previewPlayingVideo.asStateFlow()
+
     // UI events (e.g. toast / snackbar)
     private val _userMessage = MutableSharedFlow<String>()
     val userMessage: SharedFlow<String> = _userMessage.asSharedFlow()
@@ -131,7 +151,6 @@ class BrowserViewModel(
     fun setPageTitle(title: String?) {
         val resolved = title?.takeIf { it.isNotBlank() } ?: "Página Web"
         _pageTitle.value = resolved
-        // Registra visita no histórico
         val url = _currentUrl.value
         if (url.isNotBlank() && url != "about:blank" && !url.startsWith("about:") && !url.startsWith("chrome:")) {
             viewModelScope.launch {
@@ -193,6 +212,27 @@ class BrowserViewModel(
         _isBatchSheetVisible.value = false
     }
 
+    fun openPreviewPlayer(video: CapturedVideoEntity) {
+        if (video.isDrmProtected) {
+            _qualityDialogState.value = StreamQualityDialogState(
+                video = video,
+                isLoading = false,
+                isDrmProtected = true,
+                drmMessage = "Conteúdo protegido por DRM (Widevine / PlayReady / SAMPLE-AES)."
+            )
+            return
+        }
+        _previewPlayingVideo.value = video
+    }
+
+    fun closePreviewPlayer() {
+        _previewPlayingVideo.value = null
+    }
+
+    fun dismissQualityDialog() {
+        _qualityDialogState.value = null
+    }
+
     fun toggleVideoSelection(id: Long) {
         val current = _selectedIds.value.toMutableSet()
         if (current.contains(id)) {
@@ -213,30 +253,114 @@ class BrowserViewModel(
         }
     }
 
-    fun onVideoDetected(url: String, fileName: String, extension: String) {
-        // Se a captura estiver pausada pelo usuário, descarta imediatamente
+    /**
+     * Recebe mídia enriquecida com metadados, tipo de stream (DIRECT, HLS, DASH),
+     * cabeçalhos anti-403 (Cookie, User-Agent, Referer) e flag de DRM.
+     * NUNCA utiliza document.title ou título da aba.
+     */
+    fun onRichMediaDetected(payload: DetectedMediaPayload) {
         if (!_isCaptureEnabled.value) return
 
         viewModelScope.launch {
+            val cleanFileName = VideoSnifferJsBridge.sanitizeAndroidFileName(payload.fileName, "mp4")
+            val cleanTitle = cleanFileName.substringBeforeLast('.')
             val entity = CapturedVideoEntity(
-                videoUrl = url,
-                fileName = fileName,
-                fileType = extension,
+                videoUrl = payload.url,
+                fileName = cleanFileName,
+                fileType = if (payload.isStream) payload.extension else "mp4",
+                fileSizeBytes = payload.fileSizeBytes,
                 downloadStatus = CapturedVideoEntity.STATUS_DETECTED,
-                capturedAt = System.currentTimeMillis()
+                capturedAt = System.currentTimeMillis(),
+                isStream = payload.isStream,
+                streamType = payload.streamType,
+                headers = payload.headers,
+                thumbnailUrl = payload.thumbnailUrl,
+                title = cleanTitle,
+                isDrmProtected = payload.isDrmProtected
             )
             val inserted = repository.insertCapturedVideo(entity)
             if (inserted) {
-                _userMessage.emit("Vídeo capturado: $fileName")
+                if (payload.isDrmProtected) {
+                    _userMessage.emit("Aviso: Mídia protegida por DRM detectada ($cleanFileName)")
+                } else {
+                    val tag = if (payload.isStream) "[${payload.streamType.name}] " else ""
+                    _userMessage.emit("Vídeo capturado: $tag$cleanFileName")
+                }
             }
         }
+    }
+
+    fun onVideoDetected(url: String, fileName: String, extension: String) {
+        if (!_isCaptureEnabled.value) return
+
+        val headers = VideoSnifferJsBridge.buildContextHeaders(
+            mediaUrl = url,
+            pageReferer = _currentUrl.value,
+            userAgent = VideoSnifferJsBridge.MODERN_MOBILE_USER_AGENT
+        )
+        val isAdaptive = extension.equals("m3u8", ignoreCase = true) || extension.equals("mpd", ignoreCase = true)
+        val streamType = when {
+            extension.equals("m3u8", ignoreCase = true) -> StreamType.HLS
+            extension.equals("mpd", ignoreCase = true) -> StreamType.DASH
+            else -> StreamType.DIRECT
+        }
+        val cleanFileName = if (fileName.isNotBlank()) {
+            VideoSnifferJsBridge.sanitizeAndroidFileName(fileName, "mp4")
+        } else {
+            VideoSnifferJsBridge.buildFileName(url = url, videoElementTitle = null, extension = "mp4")
+        }
+        onRichMediaDetected(
+            DetectedMediaPayload(
+                url = url,
+                fileName = cleanFileName,
+                extension = if (isAdaptive) extension else "mp4",
+                isStream = isAdaptive,
+                streamType = streamType,
+                headers = headers,
+                title = cleanFileName.substringBeforeLast('.')
+            )
+        )
     }
 
     fun onVideoSniffed(url: String, fileName: String, extension: String) {
         onVideoDetected(url, fileName, extension)
     }
 
+    /**
+     * Inicia download individual.
+     * - Se for protegido por DRM, exibe alerta explicativo.
+     * - Se for Stream Adaptativa (HLS / DASH), abre o Seletor de Qualidade.
+     * - Se for arquivo direto (.mp4 / .webm / .mkv), inicia imediatamente no DownloadService.
+     */
     fun startSingleDownload(video: CapturedVideoEntity) {
+        if (video.isDrmProtected) {
+            _qualityDialogState.value = StreamQualityDialogState(
+                video = video,
+                isLoading = false,
+                isDrmProtected = true,
+                drmMessage = "Conteúdo protegido por direitos autorais (DRM Widevine / PlayReady / SAMPLE-AES)."
+            )
+            return
+        }
+
+        if (video.isStream || video.streamType != StreamType.DIRECT) {
+            _qualityDialogState.value = StreamQualityDialogState(
+                video = video,
+                isLoading = true
+            )
+            viewModelScope.launch {
+                val parseResult = repository.parseStreamManifest(video)
+                _qualityDialogState.value = StreamQualityDialogState(
+                    video = video,
+                    isLoading = false,
+                    isDrmProtected = parseResult.isDrmProtected,
+                    drmMessage = parseResult.drmMessage,
+                    options = parseResult.options
+                )
+            }
+            return
+        }
+
         viewModelScope.launch {
             val success = repository.startDownload(video)
             _selectedIds.value = _selectedIds.value - video.id
@@ -248,24 +372,40 @@ class BrowserViewModel(
         }
     }
 
+    fun confirmStreamQualityDownload(option: StreamQualityOption) {
+        val currentDialog = _qualityDialogState.value ?: return
+        val video = currentDialog.video
+        _qualityDialogState.value = null
+
+        viewModelScope.launch {
+            val success = repository.startDownloadWithQuality(video, option)
+            _selectedIds.value = _selectedIds.value - video.id
+            if (success) {
+                _userMessage.emit("Download iniciado (${option.label}): ${video.fileName}")
+            } else {
+                _userMessage.emit("Não foi possível iniciar o download deste stream")
+            }
+        }
+    }
+
     fun startBatchDownload() {
         viewModelScope.launch {
             val idsToDownload = _selectedIds.value
             val videos = detectedVideos.value.filter { idsToDownload.contains(it.id) }
             if (videos.isNotEmpty()) {
+                val drmCount = videos.count { it.isDrmProtected }
                 val started = repository.startBatchDownload(videos)
                 _selectedIds.value = emptySet()
                 _isBatchSheetVisible.value = false
-                _userMessage.emit("$started downloads em lote iniciados!")
+                if (drmCount > 0) {
+                    _userMessage.emit("$started download(s) iniciado(s). $drmCount bloqueado(s) por proteção DRM.")
+                } else {
+                    _userMessage.emit("$started downloads em lote iniciados na maior resolução!")
+                }
             }
         }
     }
 
-    /**
-     * Remoção individual (por gesto de swipe para a esquerda ou botão) de um vídeo DETECTED:
-     * Executa DELETE FROM captured_videos WHERE id = :id AND downloadStatus = 'DETECTED',
-     * liberando a URL para re-detecção futura e atualizando o contador do FAB.
-     */
     fun removeDetectedVideo(video: CapturedVideoEntity) {
         viewModelScope.launch {
             val removed = repository.deleteDetectedVideo(video.id)
@@ -276,9 +416,6 @@ class BrowserViewModel(
         }
     }
 
-    /**
-     * Remoção em lote dos vídeos detectados selecionados.
-     */
     fun removeSelectedDetectedVideos() {
         val ids = _selectedIds.value.toList()
         if (ids.isEmpty()) return

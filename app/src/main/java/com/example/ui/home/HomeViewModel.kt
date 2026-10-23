@@ -182,6 +182,20 @@ class HomeViewModel(
         _activePlayingVideo.value = null
     }
 
+    fun pauseDownload(video: CapturedVideoEntity) {
+        viewModelScope.launch {
+            repository.pauseDownload(video)
+            _userMessage.emit("Download pausado: ${video.fileName}")
+        }
+    }
+
+    fun resumeDownload(video: CapturedVideoEntity) {
+        viewModelScope.launch {
+            repository.resumeDownload(video)
+            _userMessage.emit("Download retomado: ${video.fileName}")
+        }
+    }
+
     fun cancelDownload(video: CapturedVideoEntity) {
         viewModelScope.launch {
             repository.cancelSingleDownload(video)
@@ -193,9 +207,9 @@ class HomeViewModel(
         viewModelScope.launch {
             val success = repository.retryDownload(video)
             if (success) {
-                _userMessage.emit("Download reiniciado: ${video.fileName}")
+                _userMessage.emit("Download iniciado: ${video.fileName}")
             } else {
-                _userMessage.emit("Falha ao reiniciar download")
+                _userMessage.emit("Não foi possível iniciar o download (verifique proteção DRM)")
             }
         }
     }

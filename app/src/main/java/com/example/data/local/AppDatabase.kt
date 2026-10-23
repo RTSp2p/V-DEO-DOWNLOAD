@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.TypeConverters
 import com.example.data.local.dao.BrowsingHistoryDao
 import com.example.data.local.dao.VideoDao
 import com.example.data.local.entity.BrowsingHistoryEntity
@@ -14,9 +15,10 @@ import com.example.data.local.entity.CapturedVideoEntity
         CapturedVideoEntity::class,
         BrowsingHistoryEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
+@TypeConverters(VideoTypeConverters::class)
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun videoDao(): VideoDao

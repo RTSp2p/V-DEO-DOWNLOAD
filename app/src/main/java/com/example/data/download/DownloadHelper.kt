@@ -55,13 +55,18 @@ class DownloadHelper(private val context: Context) {
     fun enqueueDownload(
         videoUrl: String,
         fileName: String,
-        fileType: String,
+        fileType: String = "mp4",
         pageUrl: String? = null,
         userAgent: String? = null,
-        targetFolderUri: String? = customDownloadFolderUri
+        targetFolderUri: String? = customDownloadFolderUri,
+        contentDisposition: String? = null
     ): Long {
         return try {
-            val sanitizedFileName = sanitizeFileName(fileName, fileType)
+            val sanitizedFileName = resolveAndSanitizeFileName(
+                videoUrl = videoUrl,
+                candidateFileName = fileName,
+                contentDisposition = contentDisposition
+            )
             val effectivePageUrl = pageUrl?.takeIf { it.isNotBlank() } ?: currentPageUrl
             val effectiveUserAgent = userAgent?.takeIf { it.isNotBlank() }
                 ?: currentUserAgent.ifBlank { VideoSnifferJsBridge.MODERN_MOBILE_USER_AGENT }
@@ -108,7 +113,7 @@ class DownloadHelper(private val context: Context) {
                 // 4. Configura o destino considerando a pasta personalizada (SAF) se aplicável
                 configureDestination(this, sanitizedFileName, targetFolderUri)
 
-                val mimeType = resolveMimeType(fileType)
+                val mimeType = resolveMimeType("mp4")
                 setMimeType(mimeType)
             }
             downloadManager.enqueue(request)
@@ -172,7 +177,7 @@ class DownloadHelper(private val context: Context) {
     fun transferToSafFolderIfNeeded(
         downloadedLocalUri: String?,
         fileName: String,
-        fileType: String,
+        fileType: String = "mp4",
         safTreeUriString: String? = customDownloadFolderUri
     ): String? {
         if (safTreeUriString.isNullOrBlank() || downloadedLocalUri.isNullOrBlank()) {
@@ -183,8 +188,8 @@ class DownloadHelper(private val context: Context) {
             val treeDocId = DocumentsContract.getTreeDocumentId(treeUri) ?: return downloadedLocalUri
             val parentDocUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, treeDocId)
 
-            val sanitizedName = sanitizeFileName(fileName, fileType)
-            val mimeType = resolveMimeType(fileType)
+            val sanitizedName = sanitizeFileName(fileName, "mp4")
+            val mimeType = resolveMimeType("mp4")
 
             val createdDocUri = DocumentsContract.createDocument(
                 context.contentResolver,
@@ -203,7 +208,6 @@ class DownloadHelper(private val context: Context) {
             }
 
             if (copiedBytes > 0L) {
-                // Remove arquivo temporário de origem se for file:// duplicado
                 if (sourceUri.scheme == "file") {
                     val oldFile = File(sourceUri.path ?: "")
                     if (oldFile.exists()) {
@@ -222,22 +226,54 @@ class DownloadHelper(private val context: Context) {
     fun resolveMimeType(fileType: String): String {
         return when (fileType.lowercase().removePrefix(".")) {
             "mp4" -> "video/mp4"
+            "m4a" -> "audio/mp4"
             "webm" -> "video/webm"
             "mkv" -> "video/x-matroska"
-            else -> MimeTypeMap.getSingleton().getMimeTypeFromExtension(fileType) ?: "video/*"
+            else -> MimeTypeMap.getSingleton().getMimeTypeFromExtension(fileType) ?: "video/mp4"
         }
     }
 
-    private fun sanitizeFileName(name: String, extension: String): String {
-        var clean = name.replace(Regex("[^a-zA-Z0-9._-]"), "_")
-        if (clean.isBlank()) {
-            clean = "video_${System.currentTimeMillis()}"
+    /**
+     * Resolve o nome do ficheiro respeitando a ordem de prioridade:
+     * 1. Content-Disposition ou segmento válido da URL (antes de "?")
+     * 2. Nome pré-extraído da tag <video> (se não for genérico)
+     * 3. Fallback "video_YYYYMMDD_HHmmss.mp4"
+     */
+    fun resolveAndSanitizeFileName(
+        videoUrl: String,
+        candidateFileName: String?,
+        contentDisposition: String? = null
+    ): String {
+        val fromHeader = VideoSnifferJsBridge.extractFileNameFromContentDisposition(contentDisposition)
+        if (!fromHeader.isNullOrBlank()) {
+            return sanitizeFileName(fromHeader, "mp4")
         }
-        val extWithDot = if (extension.startsWith(".")) extension else ".$extension"
-        if (!clean.endsWith(extWithDot, ignoreCase = true)) {
-            clean += extWithDot
+
+        val fromUrl = VideoSnifferJsBridge.extractValidUrlBaseName(videoUrl)
+        if (!fromUrl.isNullOrBlank()) {
+            return sanitizeFileName(fromUrl, "mp4")
         }
-        return clean
+
+        if (!candidateFileName.isNullOrBlank()) {
+            val cleanBase = VideoSnifferJsBridge.stripKnownExtensions(
+                VideoSnifferJsBridge.sanitizeBaseName(candidateFileName)
+            )
+            if (cleanBase.isNotBlank() && !VideoSnifferJsBridge.isGenericMediaIdentifier(cleanBase)) {
+                return "$cleanBase.mp4"
+            }
+        }
+
+        return VideoSnifferJsBridge.generateTimestampFallbackName("mp4")
+    }
+
+    /**
+     * Sanitiza o nome do ficheiro:
+     * - Remove caracteres inválidos para o Android: \ / : * ? " < > |
+     * - Garante terminação única em ".mp4" (evitando ".mp4.mp4").
+     * - Se vazio, utiliza "video_YYYYMMDD_HHmmss.mp4".
+     */
+    fun sanitizeFileName(name: String, extension: String = "mp4"): String {
+        return VideoSnifferJsBridge.sanitizeAndroidFileName(name, "mp4")
     }
 
     fun queryDownloadInfo(downloadId: Long): DownloadInfo? {

@@ -5,11 +5,16 @@ import android.content.Context
 import android.net.Uri
 import android.os.Environment
 import android.provider.DocumentsContract
+import com.example.browser.VideoSnifferJsBridge
 import com.example.data.download.DownloadHelper
+import com.example.data.download.ManifestParseResult
+import com.example.data.download.StreamManifestParser
+import com.example.data.download.StreamQualityOption
 import com.example.data.local.dao.BrowsingHistoryDao
 import com.example.data.local.dao.VideoDao
 import com.example.data.local.entity.BrowsingHistoryEntity
 import com.example.data.local.entity.CapturedVideoEntity
+import com.example.service.DownloadService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -22,6 +27,8 @@ class VideoRepository(
     private val context: Context,
     private val settingsRepository: SettingsRepository? = null
 ) {
+
+    private val manifestParser = StreamManifestParser()
 
     fun observeDetectedVideos(): Flow<List<CapturedVideoEntity>> =
         videoDao.observeDetectedVideos()
@@ -67,43 +74,95 @@ class VideoRepository(
     }
 
     /**
-     * Inserts a captured video into Room.
+     * Inserts a captured video into Room after normalizing and sanitizing its fileName and title
+     * (never concatenating page title or domain, and ensuring a single ".mp4" extension).
      * Uses OnConflictStrategy.IGNORE. Returns true if saved, false if duplicate (-1L).
      */
     suspend fun insertCapturedVideo(video: CapturedVideoEntity): Boolean = withContext(Dispatchers.IO) {
-        val rowId = videoDao.insertVideo(video)
+        val normalized = video.withNormalizedFileName()
+        val rowId = videoDao.insertVideo(normalized)
         rowId != -1L
     }
 
     /**
-     * Enqueues download for a single video using the configured SAF download folder if present.
+     * Faz o parse do manifesto (.m3u8 ou .mpd) para apresentar o seletor de resoluções
+     * (1080p, 720p, 480p, Apenas Áudio) ou detectar DRM preventivamente.
+     */
+    suspend fun parseStreamManifest(video: CapturedVideoEntity): ManifestParseResult = withContext(Dispatchers.IO) {
+        val result = manifestParser.parseManifest(
+            manifestUrl = video.videoUrl,
+            streamType = video.streamType,
+            headers = video.headers
+        )
+        if (result.isDrmProtected) {
+            videoDao.updateStatus(video.id, CapturedVideoEntity.STATUS_DRM_BLOCKED)
+        }
+        result
+    }
+
+    /**
+     * Inicia o download de uma stream adaptativa com a opção de qualidade / áudio escolhida pelo usuário.
+     * Garante que o ficheiro final termine sempre com uma única extensão ".mp4".
+     */
+    suspend fun startDownloadWithQuality(
+        video: CapturedVideoEntity,
+        option: StreamQualityOption
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (video.isDrmProtected) {
+            videoDao.updateStatus(video.id, CapturedVideoEntity.STATUS_DRM_BLOCKED)
+            return@withContext false
+        }
+
+        val updatedFileName = downloadHelper.resolveAndSanitizeFileName(
+            videoUrl = video.videoUrl,
+            candidateFileName = video.fileName
+        )
+
+        videoDao.updateStreamSelection(
+            id = video.id,
+            selectedQuality = option.label,
+            variantVideoUrl = option.videoStreamUrl,
+            variantAudioUrl = option.audioStreamUrl,
+            isAudioOnly = option.isAudioOnly,
+            fileType = "mp4",
+            fileName = updatedFileName
+        )
+
+        videoDao.updateStatus(video.id, CapturedVideoEntity.STATUS_DOWNLOADING)
+        DownloadService.startDownload(context, video.id)
+        true
+    }
+
+    /**
+     * Inicia o download via motor híbrido DownloadService (suporta Range Requests, Pausa/Retomada,
+     * HLS/DASH, descriptografia AES-128 e multiplexação MP4).
      */
     suspend fun startDownload(video: CapturedVideoEntity): Boolean = withContext(Dispatchers.IO) {
+        if (video.isDrmProtected) {
+            videoDao.updateStatus(video.id, CapturedVideoEntity.STATUS_DRM_BLOCKED)
+            return@withContext false
+        }
+
         val targetFolderUri = settingsRepository?.getDownloadFolderUriSnapshot()
             ?: downloadHelper.customDownloadFolderUri
         downloadHelper.updateDownloadFolderUri(targetFolderUri)
 
-        val downloadId = downloadHelper.enqueueDownload(
+        val sanitizedName = downloadHelper.resolveAndSanitizeFileName(
             videoUrl = video.videoUrl,
-            fileName = video.fileName,
-            fileType = video.fileType,
-            targetFolderUri = targetFolderUri
+            candidateFileName = video.fileName
         )
-        if (downloadId != -1L) {
-            videoDao.updateStatusAndDownloadId(
-                id = video.id,
-                status = CapturedVideoEntity.STATUS_DOWNLOADING,
-                downloadId = downloadId
-            )
-            true
-        } else {
-            videoDao.updateStatus(video.id, CapturedVideoEntity.STATUS_FAILED)
-            false
+        if (sanitizedName != video.fileName) {
+            videoDao.updateFileName(video.id, sanitizedName)
         }
+
+        videoDao.updateStatus(video.id, CapturedVideoEntity.STATUS_DOWNLOADING)
+        DownloadService.startDownload(context, video.id)
+        true
     }
 
     /**
-     * Starts batch download for multiple captured videos.
+     * Inicia download em lote para múltiplos vídeos capturados.
+     * Para streams adaptativas em lote, o DownloadService seleciona automaticamente uma única variante (a maior resolução).
      */
     suspend fun startBatchDownload(videos: List<CapturedVideoEntity>): Int = withContext(Dispatchers.IO) {
         val targetFolderUri = settingsRepository?.getDownloadFolderUriSnapshot()
@@ -112,34 +171,44 @@ class VideoRepository(
 
         var count = 0
         for (video in videos) {
-            val downloadId = downloadHelper.enqueueDownload(
-                videoUrl = video.videoUrl,
-                fileName = video.fileName,
-                fileType = video.fileType,
-                targetFolderUri = targetFolderUri
-            )
-            if (downloadId != -1L) {
-                videoDao.updateStatusAndDownloadId(
-                    id = video.id,
-                    status = CapturedVideoEntity.STATUS_DOWNLOADING,
-                    downloadId = downloadId
-                )
-                count++
-            } else {
-                videoDao.updateStatus(video.id, CapturedVideoEntity.STATUS_FAILED)
+            if (video.isDrmProtected) {
+                videoDao.updateStatus(video.id, CapturedVideoEntity.STATUS_DRM_BLOCKED)
+                continue
             }
+            val sanitizedName = downloadHelper.resolveAndSanitizeFileName(
+                videoUrl = video.videoUrl,
+                candidateFileName = video.fileName
+            )
+            if (sanitizedName != video.fileName) {
+                videoDao.updateFileName(video.id, sanitizedName)
+            }
+            videoDao.updateStatus(video.id, CapturedVideoEntity.STATUS_DOWNLOADING)
+            DownloadService.startDownload(context, video.id)
+            count++
         }
         count
     }
 
+    suspend fun pauseDownload(video: CapturedVideoEntity) = withContext(Dispatchers.IO) {
+        DownloadService.pauseDownload(context, video.id)
+        videoDao.updateStatus(video.id, CapturedVideoEntity.STATUS_PAUSED)
+    }
+
+    suspend fun resumeDownload(video: CapturedVideoEntity) = withContext(Dispatchers.IO) {
+        videoDao.updateStatus(video.id, CapturedVideoEntity.STATUS_DOWNLOADING)
+        DownloadService.resumeDownload(context, video.id)
+    }
+
     /**
-     * Cancela todos os downloads ativos chamando downloadManager.remove(id)
-     * e atualizando o status para FAILED no Room.
+     * Cancela todos os downloads ativos no DownloadService e DownloadManager.
      */
     suspend fun cancelAllActiveDownloads(): Int = withContext(Dispatchers.IO) {
         val downloading = videoDao.getDownloadingVideos()
-        val ids = downloading.map { it.downloadId }
-        downloadHelper.cancelDownloads(ids)
+        val ids = downloading.map { it.downloadId }.filter { it > 0 }
+        if (ids.isNotEmpty()) {
+            downloadHelper.cancelDownloads(ids)
+        }
+        DownloadService.cancelAllDownloads(context)
         videoDao.cancelAllDownloading()
         downloading.size
     }
@@ -151,6 +220,7 @@ class VideoRepository(
         if (video.downloadId > 0) {
             downloadHelper.cancelDownload(video.downloadId)
         }
+        DownloadService.cancelDownload(context, video.id)
         videoDao.updateStatus(video.id, CapturedVideoEntity.STATUS_FAILED)
         true
     }
@@ -163,8 +233,7 @@ class VideoRepository(
     }
 
     /**
-     * Called when DownloadManager completes a download.
-     * Fetches file details, transfers to SAF directory if needed, and updates Room.
+     * Compatibilidade caso algum download legado pelo DownloadManager complete.
      */
     suspend fun handleDownloadComplete(downloadId: Long) = withContext(Dispatchers.IO) {
         val downloadInfo = downloadHelper.queryDownloadInfo(downloadId)
@@ -176,9 +245,11 @@ class VideoRepository(
                 return@withContext
             }
 
+            val cleanFileName = downloadHelper.sanitizeFileName(video.fileName, "mp4")
+
             val rawLocalUri = downloadInfo?.localUri ?: run {
                 val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                val targetFile = File(downloadsDir, video.fileName)
+                val targetFile = File(downloadsDir, cleanFileName)
                 if (targetFile.exists()) Uri.fromFile(targetFile).toString() else null
             }
 
@@ -188,8 +259,8 @@ class VideoRepository(
             val finalLocalUri = if (!customFolderUri.isNullOrBlank()) {
                 downloadHelper.transferToSafFolderIfNeeded(
                     downloadedLocalUri = rawLocalUri,
-                    fileName = video.fileName,
-                    fileType = video.fileType,
+                    fileName = cleanFileName,
+                    fileType = "mp4",
                     safTreeUriString = customFolderUri
                 )
             } else {
@@ -209,25 +280,23 @@ class VideoRepository(
                 }
             }
 
-            videoDao.updateDownloadCompleted(
-                downloadId = downloadId,
+            videoDao.updateDownloadCompletedById(
+                id = video.id,
                 localUri = finalLocalUri ?: "",
-                fileSizeBytes = fileSize
+                fileSizeBytes = fileSize,
+                finalFileName = cleanFileName,
+                finalFileType = "mp4"
             )
         }
     }
 
     /**
-     * Renames a video file on disk (File or SAF Document) and in Room.
+     * Renames a video file on disk (File or SAF Document) and in Room,
+     * sanitizing invalid Android characters and ensuring a single ".mp4" extension.
      */
     suspend fun renameVideo(id: Long, newNameWithoutExt: String): Boolean = withContext(Dispatchers.IO) {
         val video = videoDao.getVideoById(id) ?: return@withContext false
-        val ext = video.fileType.removePrefix(".")
-        val finalNewName = if (newNameWithoutExt.endsWith(".$ext", ignoreCase = true)) {
-            newNameWithoutExt
-        } else {
-            "$newNameWithoutExt.$ext"
-        }
+        val finalNewName = VideoSnifferJsBridge.sanitizeAndroidFileName(newNameWithoutExt, "mp4")
 
         var updatedUri = video.localUri
         if (video.localUri != null) {
@@ -326,17 +395,20 @@ class VideoRepository(
     }
 
     /**
-     * Limpa registros selecionados do histórico nas abas da tela Home ("TODOS", "BAIXANDO", "COMPLETOS", "ERROS").
-     * Para itens finalizados (COMPLETED), NÃO apaga o arquivo físico baixado no armazenamento,
-     * mas remove o registro da tabela captured_videos para liberar o @Index(unique = true) de videoUrl
-     * e permitir novas detecções da mesma URL no futuro.
+     * Limpa registros selecionados do histórico nas abas da tela Home.
      */
     suspend fun removeVideosFromHistory(ids: List<Long>): Int = withContext(Dispatchers.IO) {
         if (ids.isEmpty()) return@withContext 0
         val videos = videoDao.getVideosByIds(ids)
         for (video in videos) {
-            if (video.downloadStatus == CapturedVideoEntity.STATUS_DOWNLOADING && video.downloadId > 0) {
-                downloadHelper.cancelDownload(video.downloadId)
+            if (video.downloadStatus == CapturedVideoEntity.STATUS_DOWNLOADING ||
+                video.downloadStatus == CapturedVideoEntity.STATUS_PAUSED ||
+                video.downloadStatus == CapturedVideoEntity.STATUS_MUXING
+            ) {
+                if (video.downloadId > 0) {
+                    downloadHelper.cancelDownload(video.downloadId)
+                }
+                DownloadService.cancelDownload(context, video.id)
             }
         }
         videoDao.deleteVideosByIds(ids)
