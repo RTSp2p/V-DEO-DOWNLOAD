@@ -84,6 +84,22 @@ class HomeViewModel(
             initialValue = null
         )
 
+    val isAdBlockerEnabled: StateFlow<Boolean> = (settingsRepository?.isAdBlockerEnabled
+        ?: MutableStateFlow(true))
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = true
+        )
+
+    fun setAdBlockerEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsRepository?.setAdBlockerEnabled(enabled)
+            val msg = if (enabled) "AdBlocker ativado" else "AdBlocker desativado"
+            _userMessage.emit(msg)
+        }
+    }
+
     private val _activePlayingVideo = MutableStateFlow<CapturedVideoEntity?>(null)
     val activePlayingVideo: StateFlow<CapturedVideoEntity?> = _activePlayingVideo.asStateFlow()
 

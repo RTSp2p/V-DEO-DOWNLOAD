@@ -32,6 +32,7 @@ class VideoHunterApplication : Application() {
         database = AppDatabase.getInstance(this)
         downloadHelper = DownloadHelper(this)
         settingsRepository = SettingsRepository(this)
+        com.example.browser.AdBlocker.init(this)
         repository = VideoRepository(
             videoDao = database.videoDao(),
             browsingHistoryDao = database.browsingHistoryDao(),

@@ -103,6 +103,7 @@ fun HomeScreen(
     val isSettingsDialogVisible by viewModel.isSettingsDialogVisible.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val downloadFolderUri by viewModel.downloadFolderUri.collectAsStateWithLifecycle()
+    val isAdBlockerEnabled by viewModel.isAdBlockerEnabled.collectAsStateWithLifecycle()
     val activePlayingVideo by viewModel.activePlayingVideo.collectAsStateWithLifecycle()
 
     val context = LocalContext.current
@@ -417,6 +418,7 @@ fun HomeScreen(
         SettingsDialog(
             currentThemeMode = themeMode,
             downloadFolderUri = downloadFolderUri,
+            isAdBlockerEnabled = isAdBlockerEnabled,
             onSelectThemeMode = { mode -> viewModel.setThemeMode(mode) },
             onSelectDownloadFolder = {
                 val initialUri = downloadFolderUri?.let {
@@ -429,6 +431,7 @@ fun HomeScreen(
                 openDocumentTreeLauncher.launch(initialUri)
             },
             onResetDownloadFolder = { viewModel.setDownloadFolderUri(null) },
+            onToggleAdBlocker = { enabled -> viewModel.setAdBlockerEnabled(enabled) },
             onDismiss = { viewModel.closeSettingsDialog() }
         )
     }

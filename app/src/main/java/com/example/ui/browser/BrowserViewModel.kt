@@ -32,6 +32,15 @@ data class StreamQualityDialogState(
     val options: List<StreamQualityOption> = emptyList()
 )
 
+data class BrowserTab(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val url: String = BrowserViewModel.DEFAULT_HOME_URL,
+    val title: String = "Início",
+    val webStateBundle: Bundle = Bundle(),
+    val isDesktopMode: Boolean = false,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
 class BrowserViewModel(
     private val repository: VideoRepository,
     private val sessionManager: SessionManager,
@@ -40,6 +49,36 @@ class BrowserViewModel(
 
     // Bundle persistido no escopo da ViewModel para preservar estado da WebView entre trocas de abas
     val webViewStateBundle: Bundle = Bundle()
+
+    // Suporte a múltiplas abas (Tabs Manager)
+    private val initialTabId = java.util.UUID.randomUUID().toString()
+    private val initialTab = BrowserTab(
+        id = initialTabId,
+        url = sessionManager.getLastUrl() ?: DEFAULT_HOME_URL,
+        title = "Início"
+    )
+
+    private val _tabs = MutableStateFlow<List<BrowserTab>>(listOf(initialTab))
+    val tabs: StateFlow<List<BrowserTab>> = _tabs.asStateFlow()
+
+    private val _activeTabId = MutableStateFlow<String>(initialTabId)
+    val activeTabId: StateFlow<String> = _activeTabId.asStateFlow()
+
+    private val _isTabsSheetVisible = MutableStateFlow(false)
+    val isTabsSheetVisible: StateFlow<Boolean> = _isTabsSheetVisible.asStateFlow()
+
+    // Alternador de Modo Desktop (User-Agent)
+    private val _isDesktopMode = MutableStateFlow(false)
+    val isDesktopMode: StateFlow<Boolean> = _isDesktopMode.asStateFlow()
+
+    // AdBlocker estado observable
+    val isAdBlockerEnabled: StateFlow<Boolean> = (settingsRepository?.isAdBlockerEnabled
+        ?: MutableStateFlow(true))
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = true
+        )
 
     // Detected videos from Room (status DETECTED)
     val detectedVideos: StateFlow<List<CapturedVideoEntity>> = repository.observeDetectedVideos()
@@ -124,7 +163,7 @@ class BrowserViewModel(
     }
 
     /**
-     * Salva automaticamente a URL no disco/DataStore e sincroniza o estado atual da ViewModel.
+     * Salva automaticamente a URL no disco/DataStore e sincroniza o estado atual da ViewModel e da aba ativa.
      */
     fun saveLastVisitedUrl(url: String) {
         val cleanUrl = url.trim()
@@ -137,6 +176,12 @@ class BrowserViewModel(
             _currentUrl.value = cleanUrl
             sessionManager.saveLastUrl(cleanUrl)
             repository.updateWebViewContext(pageUrl = cleanUrl, userAgent = null)
+
+            // Atualiza a URL na aba ativa
+            val currentId = _activeTabId.value
+            _tabs.value = _tabs.value.map {
+                if (it.id == currentId) it.copy(url = cleanUrl) else it
+            }
         }
     }
 
@@ -152,10 +197,117 @@ class BrowserViewModel(
         val resolved = title?.takeIf { it.isNotBlank() } ?: "Página Web"
         _pageTitle.value = resolved
         val url = _currentUrl.value
+
+        // Atualiza título na aba ativa
+        val currentId = _activeTabId.value
+        _tabs.value = _tabs.value.map {
+            if (it.id == currentId) it.copy(title = resolved) else it
+        }
+
         if (url.isNotBlank() && url != "about:blank" && !url.startsWith("about:") && !url.startsWith("chrome:")) {
             viewModelScope.launch {
                 repository.recordBrowsingVisit(url, resolved)
             }
+        }
+    }
+
+    // --- Gerenciador de Abas (Tabs Manager) ---
+
+    fun showTabsSheet() {
+        _isTabsSheetVisible.value = true
+    }
+
+    fun hideTabsSheet() {
+        _isTabsSheetVisible.value = false
+    }
+
+    fun openNewTab(url: String = DEFAULT_HOME_URL, title: String = "Início", currentBundle: Bundle? = null) {
+        currentBundle?.let { saveActiveTabBundle(it) }
+
+        val cleanUrl = if (url.isBlank()) DEFAULT_HOME_URL else url
+        val newTab = BrowserTab(
+            url = cleanUrl,
+            title = title,
+            isDesktopMode = _isDesktopMode.value
+        )
+        _tabs.value = _tabs.value + newTab
+        _activeTabId.value = newTab.id
+        _currentUrl.value = newTab.url
+        _pageTitle.value = newTab.title
+        _isTabsSheetVisible.value = false
+        saveLastVisitedUrl(cleanUrl)
+    }
+
+    fun selectTab(tabId: String, currentBundle: Bundle? = null) {
+        currentBundle?.let { saveActiveTabBundle(it) }
+        val targetTab = _tabs.value.firstOrNull { it.id == tabId } ?: return
+        _activeTabId.value = tabId
+        _currentUrl.value = targetTab.url
+        _pageTitle.value = targetTab.title
+        _isDesktopMode.value = targetTab.isDesktopMode
+        _isTabsSheetVisible.value = false
+    }
+
+    fun closeTab(tabId: String, currentBundle: Bundle? = null) {
+        currentBundle?.let { saveActiveTabBundle(it) }
+        val currentList = _tabs.value
+        val closingIndex = currentList.indexOfFirst { it.id == tabId }
+        val updatedList = currentList.filterNot { it.id == tabId }
+
+        if (updatedList.isEmpty()) {
+            val freshTab = BrowserTab(url = DEFAULT_HOME_URL, title = "Início")
+            _tabs.value = listOf(freshTab)
+            _activeTabId.value = freshTab.id
+            _currentUrl.value = freshTab.url
+            _pageTitle.value = freshTab.title
+            _isDesktopMode.value = false
+            return
+        }
+
+        _tabs.value = updatedList
+        if (_activeTabId.value == tabId) {
+            val newIndex = (closingIndex - 1).coerceAtLeast(0).coerceAtMost(updatedList.lastIndex)
+            val nextTab = updatedList[newIndex]
+            _activeTabId.value = nextTab.id
+            _currentUrl.value = nextTab.url
+            _pageTitle.value = nextTab.title
+            _isDesktopMode.value = nextTab.isDesktopMode
+        }
+    }
+
+    fun saveActiveTabBundle(bundle: Bundle) {
+        val currentId = _activeTabId.value
+        _tabs.value = _tabs.value.map {
+            if (it.id == currentId) {
+                it.copy(webStateBundle = bundle)
+            } else {
+                it
+            }
+        }
+    }
+
+    // --- Alternador de Modo Desktop (User-Agent) ---
+
+    fun toggleDesktopMode(): Boolean {
+        val newMode = !_isDesktopMode.value
+        _isDesktopMode.value = newMode
+        val currentId = _activeTabId.value
+        _tabs.value = _tabs.value.map {
+            if (it.id == currentId) it.copy(isDesktopMode = newMode) else it
+        }
+        viewModelScope.launch {
+            _userMessage.emit(if (newMode) "Modo Computador ativado" else "Modo Mobile ativado")
+        }
+        return newMode
+    }
+
+    // --- Configuração do AdBlocker ---
+
+    fun setAdBlockerEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsRepository?.setAdBlockerEnabled(enabled)
+            val msg = if (enabled) "AdBlocker ativado" else "AdBlocker desativado"
+            _userMessage.emit(msg)
         }
     }
 
@@ -457,6 +609,7 @@ class BrowserViewModel(
 
     companion object {
         const val DEFAULT_HOME_URL = "https://html5test.com"
+        const val DESKTOP_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
 
     class Factory(

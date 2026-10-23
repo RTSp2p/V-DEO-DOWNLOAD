@@ -228,6 +228,71 @@ class ExampleRobolectricTest {
             val customUri = "content://com.android.externalstorage.documents/tree/primary%3AMovies"
             settingsRepository.setDownloadFolderUri(customUri)
             assertEquals(customUri, settingsRepository.downloadFolderUri.first())
+
+            // AdBlocker preference
+            assertTrue(settingsRepository.isAdBlockerEnabled.first())
+            settingsRepository.setAdBlockerEnabled(false)
+            assertFalse(settingsRepository.isAdBlockerEnabled.first())
+            settingsRepository.setAdBlockerEnabled(true)
+            assertTrue(settingsRepository.isAdBlockerEnabled.first())
         }
+    }
+
+    @Test
+    fun adBlockerInitializesFromAssetsAndBlocksAdsAndSubdomains() {
+        com.example.browser.AdBlocker.init(context)
+        assertTrue(com.example.browser.AdBlocker.getBlockedHostsCount() > 0)
+
+        // Domínios diretos e subdomínios conhecidos
+        assertTrue(com.example.browser.AdBlocker.isAd("https://doubleclick.net/pagead/ads"))
+        assertTrue(com.example.browser.AdBlocker.isAd("https://adservice.google.com/pagead/id"))
+        assertTrue(com.example.browser.AdBlocker.isAd("https://sub.serving.doubleclick.net/track"))
+        assertTrue(com.example.browser.AdBlocker.isAd("https://popads.net/banner"))
+        assertTrue(com.example.browser.AdBlocker.isAd("https://ads.exoclick.com/serve"))
+
+        // Páginas legítimas não devem ser bloqueadas
+        assertFalse(com.example.browser.AdBlocker.isAd("https://html5test.com"))
+        assertFalse(com.example.browser.AdBlocker.isAd("https://www.w3schools.com/html/html5_video.asp"))
+        assertFalse(com.example.browser.AdBlocker.isAd("https://archive.org/details/movies"))
+
+        // Resposta vazia limpa
+        val emptyResp = com.example.browser.AdBlocker.createEmptyResponse()
+        assertEquals("text/plain", emptyResp.mimeType)
+        assertEquals("utf-8", emptyResp.encoding)
+    }
+
+    @Test
+    fun browserViewModelTabsAndDesktopModeManagement() {
+        val sessionManager = com.example.data.SessionManager(context)
+        val vm = com.example.ui.browser.BrowserViewModel(
+            repository = repository,
+            sessionManager = sessionManager
+        )
+
+        // Estado inicial de abas
+        assertEquals(1, vm.tabs.value.size)
+        val firstTabId = vm.activeTabId.value
+
+        // Abrir nova aba
+        vm.openNewTab(url = "https://w3schools.com", title = "W3Schools")
+        assertEquals(2, vm.tabs.value.size)
+        val secondTabId = vm.activeTabId.value
+        assertFalse(firstTabId == secondTabId)
+        assertEquals("https://w3schools.com", vm.currentUrl.value)
+
+        // Alternar modo desktop
+        assertFalse(vm.isDesktopMode.value)
+        vm.toggleDesktopMode()
+        assertTrue(vm.isDesktopMode.value)
+
+        // Fechar segunda aba -> deve voltar para a primeira
+        vm.closeTab(secondTabId)
+        assertEquals(1, vm.tabs.value.size)
+        assertEquals(firstTabId, vm.activeTabId.value)
+
+        // Fechar todas as abas -> deve criar automaticamente uma aba em branco default
+        vm.closeTab(firstTabId)
+        assertEquals(1, vm.tabs.value.size)
+        assertFalse(vm.tabs.value.first().id.isBlank())
     }
 }

@@ -5,6 +5,7 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -61,6 +62,18 @@ class SettingsRepository(
             preferences[KEY_DOWNLOAD_FOLDER_URI]?.takeIf { it.isNotBlank() }
         }
 
+    val isAdBlockerEnabled: Flow<Boolean> = dataStore.data
+        .catch { exception ->
+            if (exception is IOException) {
+                emit(emptyPreferences())
+            } else {
+                throw exception
+            }
+        }
+        .map { preferences ->
+            preferences[KEY_ADBLOCKER_ENABLED] ?: true
+        }
+
     suspend fun setThemeMode(mode: ThemeMode) {
         dataStore.edit { preferences ->
             preferences[KEY_THEME_MODE] = mode.value
@@ -77,6 +90,20 @@ class SettingsRepository(
         }
     }
 
+    suspend fun setAdBlockerEnabled(enabled: Boolean) {
+        dataStore.edit { preferences ->
+            preferences[KEY_ADBLOCKER_ENABLED] = enabled
+        }
+    }
+
+    suspend fun isAdBlockerEnabledSnapshot(): Boolean {
+        return try {
+            isAdBlockerEnabled.first()
+        } catch (_: Exception) {
+            true
+        }
+    }
+
     suspend fun getDownloadFolderUriSnapshot(): String? {
         return try {
             downloadFolderUri.first()
@@ -88,6 +115,7 @@ class SettingsRepository(
     companion object {
         val KEY_THEME_MODE = stringPreferencesKey("theme_mode")
         val KEY_DOWNLOAD_FOLDER_URI = stringPreferencesKey("download_folder_uri")
+        val KEY_ADBLOCKER_ENABLED = booleanPreferencesKey("adblocker_enabled")
 
         fun formatReadableFolderPath(uriString: String?): String {
             if (uriString.isNullOrBlank()) {

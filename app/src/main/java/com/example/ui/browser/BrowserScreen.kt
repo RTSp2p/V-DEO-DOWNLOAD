@@ -4,11 +4,14 @@ import android.annotation.SuppressLint
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.Message
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -44,6 +47,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
@@ -52,6 +56,9 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Smartphone
+import androidx.compose.material.icons.filled.Tab
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Card
@@ -100,6 +107,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
+import com.example.browser.AdBlocker
 import com.example.browser.VideoSnifferJsBridge
 import com.example.browser.VideoSnifferWebViewClient
 import com.example.ui.player.InternalVideoPlayer
@@ -114,6 +122,7 @@ private data class QuickBookmark(
     val color: Color
 )
 
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun BrowserScreen(
@@ -133,6 +142,11 @@ fun BrowserScreen(
     val isHistoryDialogVisible by viewModel.isHistoryDialogVisible.collectAsStateWithLifecycle()
     val qualityDialogState by viewModel.qualityDialogState.collectAsStateWithLifecycle()
     val previewPlayingVideo by viewModel.previewPlayingVideo.collectAsStateWithLifecycle()
+    val tabs by viewModel.tabs.collectAsStateWithLifecycle()
+    val activeTabId by viewModel.activeTabId.collectAsStateWithLifecycle()
+    val isTabsSheetVisible by viewModel.isTabsSheetVisible.collectAsStateWithLifecycle()
+    val isDesktopMode by viewModel.isDesktopMode.collectAsStateWithLifecycle()
+    val isAdBlockerEnabled by viewModel.isAdBlockerEnabled.collectAsStateWithLifecycle()
 
     var webViewInstance by remember { mutableStateOf<WebView?>(null) }
     var urlInputText by remember { mutableStateOf(currentUrl) }
@@ -197,6 +211,29 @@ fun BrowserScreen(
                 viewModel.saveLastVisitedUrl(activeUrl)
             }
             webViewInstance?.saveState(webViewStateBundle)
+        }
+    }
+
+    var lastHandledTabId by remember { mutableStateOf(activeTabId) }
+
+    // Sincronização ao alternar entre abas abertas
+    LaunchedEffect(activeTabId) {
+        if (activeTabId != lastHandledTabId) {
+            lastHandledTabId = activeTabId
+            val activeTab = tabs.find { it.id == activeTabId }
+            if (activeTab != null && webViewInstance != null) {
+                urlInputText = activeTab.url
+                webViewInstance?.settings?.apply {
+                    userAgentString = if (activeTab.isDesktopMode) BrowserViewModel.DESKTOP_USER_AGENT else VideoSnifferJsBridge.MODERN_MOBILE_USER_AGENT
+                    useWideViewPort = activeTab.isDesktopMode
+                    loadWithOverviewMode = activeTab.isDesktopMode
+                }
+                if (!activeTab.webStateBundle.isEmpty) {
+                    webViewInstance?.restoreState(activeTab.webStateBundle)
+                } else if (activeTab.url.isNotBlank() && activeTab.url != "about:blank") {
+                    webViewInstance?.loadUrl(activeTab.url)
+                }
+            }
         }
     }
 
@@ -359,7 +396,66 @@ fun BrowserScreen(
 
                     Spacer(modifier = Modifier.width(4.dp))
 
-                    // Menu de Opções (Três Pontos no Canto Superior Direito)
+                    // 1. Botão Alternador de Modo Computador / Mobile (Desktop User-Agent)
+                    IconButton(
+                        onClick = {
+                            val newMode = viewModel.toggleDesktopMode()
+                            webViewInstance?.settings?.apply {
+                                userAgentString = if (newMode) BrowserViewModel.DESKTOP_USER_AGENT else VideoSnifferJsBridge.MODERN_MOBILE_USER_AGENT
+                                useWideViewPort = newMode
+                                loadWithOverviewMode = newMode
+                            }
+                            webViewInstance?.reload()
+                        },
+                        modifier = Modifier
+                            .size(36.dp)
+                            .testTag("desktop_mode_toggle")
+                    ) {
+                        Icon(
+                            imageVector = if (isDesktopMode) Icons.Default.DesktopWindows else Icons.Default.Smartphone,
+                            contentDescription = if (isDesktopMode) "Modo Computador ativado (toque para alternar)" else "Modo Celular ativado (toque para alternar)",
+                            tint = if (isDesktopMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
+                    // 2. Botão Gerenciador de Abas com Contador Visual de Abas
+                    BadgedBox(
+                        badge = {
+                            Badge(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.testTag("tabs_badge_count")
+                            ) {
+                                Text(
+                                    text = "${tabs.size}",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 10.sp
+                                )
+                            }
+                        }
+                    ) {
+                        IconButton(
+                            onClick = {
+                                val bundle = Bundle()
+                                webViewInstance?.saveState(bundle)
+                                viewModel.saveActiveTabBundle(bundle)
+                                viewModel.showTabsSheet()
+                            },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .testTag("tabs_manager_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Tab,
+                                contentDescription = "Gerenciar abas (${tabs.size})",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+
+                    // 3. Menu de Opções Adicionais (Três Pontos)
                     Box {
                         IconButton(
                             onClick = { showOptionsMenu = true },
@@ -380,7 +476,83 @@ fun BrowserScreen(
                             onDismissRequest = { showOptionsMenu = false },
                             modifier = Modifier.background(MaterialTheme.colorScheme.surfaceVariant)
                         ) {
-                            // 1. "Começar Captura" (Checkbox toggle com persistência em DataStore)
+                            // Alternar AdBlocker
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Checkbox(
+                                            checked = isAdBlockerEnabled,
+                                            onCheckedChange = { viewModel.setAdBlockerEnabled(it) },
+                                            colors = CheckboxDefaults.colors(
+                                                checkedColor = MaterialTheme.colorScheme.primary,
+                                                checkmarkColor = MaterialTheme.colorScheme.onPrimary,
+                                                uncheckedColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "Bloqueador de Anúncios",
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    viewModel.setAdBlockerEnabled(!isAdBlockerEnabled)
+                                },
+                                modifier = Modifier.testTag("toggle_adblocker_menu_item")
+                            )
+
+                            // Alternar Modo Desktop
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Checkbox(
+                                            checked = isDesktopMode,
+                                            onCheckedChange = {
+                                                val newMode = viewModel.toggleDesktopMode()
+                                                webViewInstance?.settings?.apply {
+                                                    userAgentString = if (newMode) BrowserViewModel.DESKTOP_USER_AGENT else VideoSnifferJsBridge.MODERN_MOBILE_USER_AGENT
+                                                    useWideViewPort = newMode
+                                                    loadWithOverviewMode = newMode
+                                                }
+                                                webViewInstance?.reload()
+                                            },
+                                            colors = CheckboxDefaults.colors(
+                                                checkedColor = MaterialTheme.colorScheme.primary,
+                                                checkmarkColor = MaterialTheme.colorScheme.onPrimary,
+                                                uncheckedColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "Versão para Computador",
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    val newMode = viewModel.toggleDesktopMode()
+                                    webViewInstance?.settings?.apply {
+                                        userAgentString = if (newMode) BrowserViewModel.DESKTOP_USER_AGENT else VideoSnifferJsBridge.MODERN_MOBILE_USER_AGENT
+                                        useWideViewPort = newMode
+                                        loadWithOverviewMode = newMode
+                                    }
+                                    webViewInstance?.reload()
+                                },
+                                modifier = Modifier.testTag("toggle_desktop_menu_item")
+                            )
+
+                            // "Começar Captura" (Checkbox toggle com persistência em DataStore)
                             DropdownMenuItem(
                                 text = {
                                     Row(
@@ -411,7 +583,7 @@ fun BrowserScreen(
                                 modifier = Modifier.testTag("toggle_sniffer_menu_item")
                             )
 
-                            // 2. "Voltar para Home" (sem destruir a WebView)
+                            // "Voltar para Home" (sem destruir a WebView)
                             DropdownMenuItem(
                                 text = {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -436,7 +608,7 @@ fun BrowserScreen(
                                 modifier = Modifier.testTag("navigate_home_menu_item")
                             )
 
-                            // 3. "Histórico" (últimos 30 sites visitados)
+                            // "Histórico" (últimos 30 sites visitados)
                             DropdownMenuItem(
                                 text = {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -668,10 +840,12 @@ fun BrowserScreen(
                                 domStorageEnabled = true
                                 databaseEnabled = true
                                 mediaPlaybackRequiresUserGesture = false
-                                userAgentString = VideoSnifferJsBridge.MODERN_MOBILE_USER_AGENT
+                                setSupportMultipleWindows(true)
+                                javaScriptCanOpenWindowsAutomatically = false
+                                userAgentString = if (isDesktopMode) BrowserViewModel.DESKTOP_USER_AGENT else VideoSnifferJsBridge.MODERN_MOBILE_USER_AGENT
                                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                                useWideViewPort = true
-                                loadWithOverviewMode = true
+                                useWideViewPort = isDesktopMode
+                                loadWithOverviewMode = isDesktopMode
                                 builtInZoomControls = true
                                 displayZoomControls = false
                             }
@@ -726,14 +900,14 @@ fun BrowserScreen(
                                 },
                                 onPageFinishedCallback = { finalUrl, title ->
                                     viewModel.setLoading(false)
-                                    // CORREÇÃO: Salva automaticamente a URL no disco a cada término de carregamento
                                     if (finalUrl != "about:blank" && finalUrl.isNotBlank()) {
                                         urlInputText = finalUrl
                                         viewModel.saveLastVisitedUrl(finalUrl)
                                         viewModel.updateWebViewContext(finalUrl, settings.userAgentString)
                                     }
                                     viewModel.setPageTitle(title)
-                                }
+                                },
+                                isAdBlockerEnabledProvider = { isAdBlockerEnabled }
                             )
 
                             webChromeClient = object : WebChromeClient() {
@@ -743,6 +917,54 @@ fun BrowserScreen(
 
                                 override fun onReceivedTitle(view: WebView?, title: String?) {
                                     viewModel.setPageTitle(title)
+                                }
+
+                                override fun onCreateWindow(
+                                    view: WebView?,
+                                    isDialog: Boolean,
+                                    isUserGesture: Boolean,
+                                    resultMsg: Message?
+                                ): Boolean {
+                                    // Bloqueia aberturas não originadas por ação do usuário (popunders e ghost clicks)
+                                    if (!isUserGesture) {
+                                        return false
+                                    }
+
+                                    val transport = resultMsg?.obj as? WebView.WebViewTransport
+                                    if (transport != null) {
+                                        val tempWebView = WebView(view?.context ?: return false)
+                                        tempWebView.webViewClient = object : WebViewClient() {
+                                            override fun shouldOverrideUrlLoading(v: WebView?, req: WebResourceRequest?): Boolean {
+                                                val target = req?.url?.toString()
+                                                if (!target.isNullOrBlank() && !AdBlocker.isAd(target)) {
+                                                    val bundle = Bundle()
+                                                    view.saveState(bundle)
+                                                    viewModel.openNewTab(url = target, title = "Nova Aba", currentBundle = bundle)
+                                                }
+                                                return true
+                                            }
+                                        }
+                                        transport.webView = tempWebView
+                                        resultMsg.sendToTarget()
+                                        return true
+                                    }
+
+                                    val href = view?.hitTestResult?.extra
+                                    if (!href.isNullOrBlank() && !AdBlocker.isAd(href)) {
+                                        val bundle = Bundle()
+                                        view.saveState(bundle)
+                                        viewModel.openNewTab(url = href, title = "Nova Aba", currentBundle = bundle)
+                                        return true
+                                    }
+
+                                    return false
+                                }
+
+                                override fun onCloseWindow(window: WebView?) {
+                                    super.onCloseWindow(window)
+                                    val bundle = Bundle()
+                                    webViewInstance?.saveState(bundle)
+                                    viewModel.closeTab(activeTabId, bundle)
                                 }
                             }
 
@@ -833,6 +1055,30 @@ fun BrowserScreen(
             streamType = previewVideo.streamType,
             isOnlinePreview = true,
             onClose = { viewModel.closePreviewPlayer() }
+        )
+    }
+
+    // Gerenciador Modal de Múltiplas Abas (Tabs Manager)
+    if (isTabsSheetVisible) {
+        TabsManagerSheet(
+            tabs = tabs,
+            activeTabId = activeTabId,
+            onSelectTab = { selectedId ->
+                val bundle = Bundle()
+                webViewInstance?.saveState(bundle)
+                viewModel.selectTab(selectedId, bundle)
+            },
+            onCloseTab = { closedId ->
+                val bundle = Bundle()
+                webViewInstance?.saveState(bundle)
+                viewModel.closeTab(closedId, bundle)
+            },
+            onNewTab = {
+                val bundle = Bundle()
+                webViewInstance?.saveState(bundle)
+                viewModel.openNewTab(currentBundle = bundle)
+            },
+            onDismiss = { viewModel.hideTabsSheet() }
         )
     }
 }

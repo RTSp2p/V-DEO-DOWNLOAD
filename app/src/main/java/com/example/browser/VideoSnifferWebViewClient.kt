@@ -18,7 +18,8 @@ class VideoSnifferWebViewClient(
     private val onVideoDetected: (url: String, fileName: String, extension: String) -> Unit,
     private val onRichMediaDetected: ((DetectedMediaPayload) -> Unit)? = null,
     private val onPageStartedCallback: (url: String) -> Unit = {},
-    private val onPageFinishedCallback: (url: String, title: String?) -> Unit = { _, _ -> }
+    private val onPageFinishedCallback: (url: String, title: String?) -> Unit = { _, _ -> },
+    private val isAdBlockerEnabledProvider: () -> Boolean = { true }
 ) : WebViewClient() {
 
     private val snifferScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -26,6 +27,47 @@ class VideoSnifferWebViewClient(
 
     @Volatile
     private var currentMainPageUrl: String = ""
+
+    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+        val uri = request?.url ?: return false
+        val urlString = uri.toString()
+        val scheme = uri.scheme?.lowercase() ?: return true
+
+        // 1. Bloqueia anúncios e popunders redirecionados para redes de publicidade
+        if (isAdBlockerEnabledProvider() && AdBlocker.isAd(urlString)) {
+            return true
+        }
+
+        // 2. Permite estritamente navegação para esquemas web padrão (http e https)
+        if (scheme == "http" || scheme == "https") {
+            return false
+        }
+
+        // 3. Bloqueia redirecionamentos involuntários para esquemas de aplicativos externos
+        // (ex: intent://, market://, tg://, whatsapp://) para proteger contra popunders e cliques fantasmas
+        return true
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+        if (url.isNullOrBlank()) return false
+        val uri = try {
+            android.net.Uri.parse(url)
+        } catch (_: Exception) {
+            return true
+        }
+        val scheme = uri.scheme?.lowercase() ?: return true
+
+        if (isAdBlockerEnabledProvider() && AdBlocker.isAd(url)) {
+            return true
+        }
+
+        if (scheme == "http" || scheme == "https") {
+            return false
+        }
+
+        return true
+    }
 
     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
         super.onPageStarted(view, url, favicon)
@@ -80,6 +122,7 @@ class VideoSnifferWebViewClient(
 
     /**
      * Captura via interceptação de rede em shouldInterceptRequest:
+     * - Bloqueia requisições de anúncios e rastreadores (AdBlocker) retornando resposta vazia
      * - Arquivos diretos (.mp4, .webm, .mkv)
      * - Manifestos de stream adaptativa (.m3u8 HLS e .mpd DASH)
      * - MIME types de manifesto (application/x-mpegurl, application/vnd.apple.mpegurl, application/dash+xml)
@@ -94,6 +137,11 @@ class VideoSnifferWebViewClient(
 
         val uri = request.url ?: return null
         val urlString = uri.toString()
+
+        // 0. Bloqueio leve de anúncios via lista de hosts (AdBlocker)
+        if (isAdBlockerEnabledProvider() && AdBlocker.isAd(urlString)) {
+            return AdBlocker.createEmptyResponse()
+        }
 
         // 1. Ignorar protocolos incompatíveis (blob:, data:, etc.)
         val lowerProtocol = urlString.lowercase()
